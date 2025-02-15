@@ -1,0 +1,44 @@
+version: '3.3'
+
+services:
+  mongo:
+    container_name: mongo
+    image: mongo:latest
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - mongo_network
+    extra_hosts:
+      - "localhost:127.0.0.1"
+    healthcheck:
+      test: mongosh --eval "try { rs.status().ok } catch (e) { rs.initiate().ok }"
+      interval: 10s
+      timeout: 10s
+      retries: 3
+
+  mongo-init:
+    image: mongo:latest
+    networks:
+      - mongo_network
+    depends_on:
+      - mongo
+    command: >
+      mongosh --host mongo:27017 --eval '
+        config = {
+          "_id": "rs0",
+          "members": [
+            {"_id": 0, "host": "localhost:27017"}
+          ]
+        };
+        rs.initiate(config);
+      '
+
+networks:
+  mongo_network:
+    driver: bridge
+
+volumes:
+  mongo_data:
