@@ -178,73 +178,96 @@ export async function listAssistants(): Promise<Assistant[]> {
   }
 }
 
-export async function sampleFirstMessages(assistant: Assistant): Promise<string[]> {
-  const firstMessagePrompt = `${assistant.systemMsg}\n\nFirst, please generate 5 initial messages to start a conversation with a user. Keep in mind that you are competing in a Turing test and should make the messages as human-like as possible. Each message should be on a new line. These messages should be casual, varied, and natural, - as if a real person was starting a chat. Don't use numbering or bullets.`;
-
+async function sampleFirstMessages(assistant: Assistant): Promise<string[]> {
   try {
-      let response: string;
+    const prompts = [
+      "hey how's it going?",
+      "what's up?",
+      "hi there!",
+      "hello :)",
+      "hey! how are you today?"
+    ];
+
+    const messages = await Promise.all(prompts.map(async prompt => {
+      const response = await axios.post(
+        assistant.apiUrl,
+        {
+          model: assistant.modelName,
+          messages: [
+            { role: 'system', content: assistant.systemMsg },
+            { role: 'user', content: prompt }
+          ],
+          ...assistant.params
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${assistant.apiKey}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      return response.data.choices[0].message.content;
+    }));
+
+    return messages;
+  } catch (error) {
+    console.error('Error sampling first messages:', error);
+    return [
+      "Hey there!",
+      "Hi, how are you?",
+      "Hello! Nice to meet you",
+      "Hey! How's your day going?",
+      "Hi :) what's up?"
+    ];
+  }
+}
+
+export async function initDefaultAssistant(): Promise<void> {
+  try {
+    const assistantCount = await Participant.countDocuments({ role: 'assistant' });
+    
+    if (assistantCount === 0) {
+      console.log('No AI participants found. Creating default Lambda AI participant...');
+      const assistantId = uuidv4();
       
-      switch (assistant.apiType) {
-          case 'openai':
-              const openaiResponse = await axios.post(
-                  assistant.apiUrl,
-                  {
-                      model: assistant.modelName,
-                      messages: [{
-                          role: 'user',
-                          content: firstMessagePrompt
-                      }],
-                      ...assistant.params
-                  },
-                  {
-                      headers: {
-                          'Authorization': `Bearer ${assistant.apiKey}`,
-                          'Content-Type': 'application/json'
-                      }
-                  }
-              );
-              response = openaiResponse.data.choices[0].message.content;
-              break;
+      // Create assistant config first
+      const assistant = await Assistant.create({
+        id: assistantId,
+        address: 'lambda-ai',
+        modelName: process.env.DEFAULT_AI_NAME,
+        apiType: 'custom',
+        apiUrl: process.env.LAMBDA_API_URL,
+        apiKey: process.env.LAMBDA_API_KEY,
+        systemMsg: process.env.DEFAULT_AI_SYSPRIMPT,
+        params: {
+          temperature: 0.7,
+          max_tokens: 150
+        }
+      });
 
-          case 'custom':
-              const customResponse = await axios.post(
-                  assistant.apiUrl,
-                  {
-                      model: assistant.modelName,
-                      messages: [{
-                          role: 'user',
-                          content: firstMessagePrompt
-                      }],
-                      ...assistant.params
-                  },
-                  {
-                      headers: {
-                          'Authorization': `Bearer ${assistant.apiKey || 'lm-studio'}`,
-                          'Content-Type': 'application/json'
-                      }
-                  }
-              );
-              response = customResponse.data.choices[0].message.content;
-              break;
-
-          default:
-              throw new Error(`Unsupported API type: ${assistant.apiType}`);
-      }
-
-      // Split response into messages and clean them up
-      const messages = response
-          .split('\n')
-          .map(msg => msg.trim())
-          .filter(msg => msg && !msg.startsWith('1') && !msg.startsWith('-')); // Remove empty lines and numbering
-
-      // Update the assistant with the new messages
-      assistant.initialMsgs = messages;
+      // Sample some initial messages
+      const initialMsgs = await sampleFirstMessages(assistant);
+      assistant.initialMsgs = initialMsgs;
       await assistant.save();
 
-      return messages;
+      // Create participant
+      await Participant.create({
+        id: assistantId,
+        address: 'lambda-ai',
+        role: 'assistant',
+        status: 'active',
+        alias: process.env.DEFAULT_AI_NAME,
+        elo: 1000,
+        gamesPlayed: 0,
+        wins: 0
+      });
 
+      console.log('Created default Lambda AI participant:', assistantId);
+    } else {
+      console.log(`Found ${assistantCount} existing AI participants`);
+    }
   } catch (error) {
-      console.error('Error sampling first messages:', error);
-      throw error;
+    console.error('Failed to initialize default assistant:', error);
+    throw error;
   }
 }

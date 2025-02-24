@@ -4,7 +4,6 @@ import { Participant } from '../models/participant';
 import { getAssistantById } from './assistant';
 import { Assistant } from '../models/assistant'
 import axios from 'axios';
-import { Anthropic } from '@anthropic-ai/sdk';
 import { Server, Socket } from 'socket.io';
 import OpenAI from 'openai';
 
@@ -147,8 +146,7 @@ async function getAIResponse(sessionId: string, assistantId: string): Promise<st
     switch (assistant.apiType) {
       case 'openai':
         return await handleOpenAIResponse(assistant, chatHistory);
-    //   case 'anthropic':
-    //     return await handleAnthropicResponse(assistant, chatHistory);
+
       case 'custom':
         return await handleCustomResponse(assistant, chatHistory);
       default:

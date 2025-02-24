@@ -51,13 +51,6 @@ async function main() {
     return io.sockets.sockets.get(socketId);
   }
 
-  interface WaitingUser {
-    participant: Participant;
-    joinedAt: Date;
-    socketId: string;
-  }
-  let waitingQueue: WaitingUser[] = []; // In-memory queue for simplicity
-
   // Setup MongoDB adapter for Socket.IO
   const mongoCollection = mongoose.connection.collection('socket.io-adapter-events') as any;
   io.adapter(createAdapter(mongoCollection));
@@ -70,28 +63,20 @@ async function main() {
 
     socket.emit('connection_established');
     
-    socket.on('initialize_participant', async ({ address }) => {
+    socket.on('initialize_participant', async ({ address, role = 'user' }) => {
       console.log('Processing initialize_participant for ', address);
       try {
-        // Get or create participant
-        const participant = await initParticipant(address, 'user');
-        console.log('participant:', participant);
+        const participant = await initParticipant(address, role);
         
-        // Store socket mapping
+        // Store the mapping
         activeSockets.set(participant.id, socket.id);
-        console.log('Added to activeSockets map:', participant.id);
         
-        // Send back the participant ID
-        socket.emit('participant_initialized', { 
-          id: participant.id 
-        });
-        console.log('Emitted participant_initialized for:', participant.id);
-  
-        // Clean up mapping on disconnect
         socket.on('disconnect', () => {
-          console.log('Client disconnected:', socket.id);
+          // Clean up the mapping when socket disconnects
           activeSockets.delete(participant.id);
         });
+
+        socket.emit('participant_initialized', participant);
       } catch (error) {
         console.error('Failed to initialize participant:', error);
         socket.emit('error', 'Failed to initialize participant');
@@ -119,13 +104,6 @@ async function main() {
         // Also reset matching status on error
         socket.emit('matching_status', { status: 'failed' });
       }
-    });
-
-    // Remove participant from pools on disconnect
-    socket.on('disconnect', () => {
-      console.log('Client disconnected:', socket.id);
-      matchingEngine.removeParticipant(socket.id);
-      activeSockets.delete(socket.id);
     });
 
     socket.on('delete_assistant', async ({ address, assistantId }) => {
@@ -364,11 +342,28 @@ async function main() {
             .limit(10)
             .select('id alias elo gamesPlayed wins');
       
-          // Fetch top AI agents
-          const topAgents = await Assistant.find({})
+          // Fetch top AI participants
+          const topAIParticipants = await Participant.find({ role: 'assistant' })
             .sort({ elo: -1 })
             .limit(10)
-            .select('id modelName elo gamesPlayed wins');
+            .select('id alias elo gamesPlayed wins');
+      
+          // Get corresponding assistant configs
+          const topAgents = await Promise.all(
+            topAIParticipants.map(async (participant) => {
+              const assistant = await Assistant.findOne({ id: participant.id })
+                .select('id modelName apiType');
+              
+              return {
+                id: participant.id,
+                alias: participant.alias,
+                modelName: assistant?.modelName,
+                elo: participant.elo,
+                gamesPlayed: participant.gamesPlayed,
+                wins: participant.wins
+              };
+            })
+          );
       
           socket.emit('ranking_data', {
             users: topUsers,
@@ -376,7 +371,7 @@ async function main() {
           });
         } catch (error) {
           console.error('Error fetching rankings:', error);
-          socket.emit('error', 'Failed to fetch ranking data');
+          socket.emit('error', 'Failed to fetch rankings');
         }
       });
     });

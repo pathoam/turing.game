@@ -3,6 +3,8 @@ import { Participant } from '../models/participant';
 import { chatSession } from '../models/chatSession';
 import { Message } from '../models/message';
 import { Assistant } from '../models/assistant';
+import { v4 as uuidv4 } from 'uuid';
+import { initDefaultAssistant } from '../handlers/assistant';
 
 export async function initializeDatabase() {
   try {
@@ -25,7 +27,10 @@ export async function initializeDatabase() {
       }
     }
 
-    // Optionally create indexes
+    // Initialize default AI assistant
+    await initDefaultAssistant();
+
+    // Create indexes
     await Promise.all([
       Participant.syncIndexes(),
       chatSession.syncIndexes(),

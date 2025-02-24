@@ -277,13 +277,7 @@ private async createMatch(
         sessionId: uuidv4(),
         participants: [participant1.participant._id, participant2.participant._id],
         status: 'active',
-        chatType: 'user',
-        createdAt: new Date(),
-        // Store stakes at match creation time
-        participantStakes: {
-            [participant1.participant.id]: participant1.participant.currentStake,
-            [participant2.participant.id]: participant2.participant.currentStake
-        }
+        createdAt: new Date()
     });
 
     socket.join(session.sessionId);
@@ -294,13 +288,11 @@ private async createMatch(
     console.log(`Match created - ${session.sessionId}`, {
         p1: {
             id: participant1.participant.id,
-            elo: participant1.participant.elo,
-            stake: participant1.participant.currentStake
+            elo: participant1.participant.elo
         },
         p2: {
             id: participant2.participant.id,
-            elo: participant2.participant.elo,
-            stake: participant2.participant.currentStake
+            elo: participant2.participant.elo
         }
     });
 }

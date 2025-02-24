@@ -2,8 +2,9 @@ import { Participant, GameOutcome, StakeInfo, Currency } from '../models/partici
 import { Assistant } from '../models/assistant'
 import { v4 as uuidv4 } from 'uuid';
 import mongoose from 'mongoose';
+import OpenAI from 'openai';
 
-export async function initParticipant(address: string, role: 'user' | 'assistant') {
+export async function initParticipant(address: string, role: 'user' | 'assistant' = 'user') {
     try {
       // Check if participant already exists
       let participant = await Participant.findOne({ address, role });
@@ -89,8 +90,6 @@ export async function initParticipant(address: string, role: 'user' | 'assistant
     }
   }
 
-
-
 export async function updateParticipants(outcome: GameOutcome) {
     const { winner, loser } = outcome;
     
@@ -111,12 +110,8 @@ export async function updateParticipants(outcome: GameOutcome) {
     const turingBonusWinner = maxWinnings * 0.25;
     const turingConsolation = maxWinnings * 0.125;
 
-    // Update both participants in a single transaction
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
     try {
-        // Update winner
+        // Update winner without transaction
         const updatedWinner = await Participant.findOneAndUpdate(
             { id: winner.id },
             {
@@ -129,10 +124,10 @@ export async function updateParticipants(outcome: GameOutcome) {
                 },
                 $unset: { currentStake: "" }
             },
-            { new: true, session }
+            { new: true }
         );
 
-        // Update loser
+        // Update loser without transaction
         const updatedLoser = await Participant.findOneAndUpdate(
             { id: loser.id },
             {
@@ -144,10 +139,9 @@ export async function updateParticipants(outcome: GameOutcome) {
                 },
                 $unset: { currentStake: "" }
             },
-            { new: true, session }
+            { new: true }
         );
 
-        await session.commitTransaction();
         if (!updatedWinner || !updatedLoser) {
             throw new Error('Failed to update participants');
         }
@@ -161,11 +155,89 @@ export async function updateParticipants(outcome: GameOutcome) {
                 eloChange: eloChangeLoser
             }
         };
-
     } catch (error) {
-        await session.abortTransaction();
         throw error;
-    } finally {
-        session.endSession();
     }
+}
+
+/**
+ * Generates initial messages for an AI participant
+ * @param participant - The AI participant to generate messages for
+ * @returns Array of generated messages
+ */
+export async function generateInitialMessages(participant: Participant): Promise<string[]> {
+  try {
+    const assistant = await Assistant.findOne({ id: participant.id });
+    if (!assistant) {
+      throw new Error('No assistant config found for participant');
+    }
+
+    const openai = new OpenAI({
+      apiKey: assistant.apiKey,
+      baseURL: assistant.apiUrl
+    });
+
+    const prompts = [
+      "hey how's it going?",
+      "what's up?",
+      "hi there!",
+      "hello :)",
+      "hey! how are you today?",
+      "hey, nice to meet you!",
+      "hi! ready to chat?",
+      "hello there!",
+      "hey friend!",
+      "hi, how's your day?"
+    ];
+
+    const messages = await Promise.all(prompts.map(async prompt => {
+      const response = await openai.chat.completions.create({
+        model: assistant.modelName,
+        messages: [
+          { role: 'system', content: assistant.systemMsg },
+          { role: 'user', content: prompt }
+        ],
+        ...assistant.params
+      });
+
+      return response.choices[0]?.message?.content || prompt;
+    }));
+
+    // Update assistant with new messages
+    assistant.initialMsgs = messages;
+    await assistant.save();
+
+    return messages;
+  } catch (error) {
+    console.error('Error generating initial messages:', error);
+    return [
+      "Hey there!",
+      "Hi, how are you?",
+      "Hello! Nice to meet you",
+      "Hey! How's your day going?",
+      "Hi :) what's up?"
+    ];
+  }
+}
+
+/**
+ * Gets a random initial message for an AI participant
+ * @param participant - The AI participant to get a message for
+ * @returns A random initial message
+ */
+export async function getInitialMessage(participant: Participant): Promise<string> {
+  try {
+    const assistant = await Assistant.findOne({ id: participant.id });
+    if (!assistant || !assistant.initialMsgs?.length) {
+      // If no messages exist, generate them first
+      const messages = await generateInitialMessages(participant);
+      return messages[Math.floor(Math.random() * messages.length)];
+    }
+
+    // Return random message from existing ones
+    return assistant.initialMsgs[Math.floor(Math.random() * assistant.initialMsgs.length)];
+  } catch (error) {
+    console.error('Error getting initial message:', error);
+    return "Hey there! How are you?"; // Fallback message
+  }
 }
