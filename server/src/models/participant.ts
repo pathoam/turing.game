@@ -21,6 +21,13 @@ export interface StakeInfo {
   tokenAmount: number;  // Actual amount of tokens based on price
 }
 
+export interface VerificationStatus {
+  verified: boolean;
+  score: number;  // For hCaptcha/reCAPTCHA score
+  lastVerified: Date;
+  method: 'hcaptcha' | 'recaptcha' | 'turnstile';
+}
+
 export interface Participant extends Document {
   id: string;           // UUID primary key
   address: string;      // Solana wallet address
@@ -33,6 +40,7 @@ export interface Participant extends Document {
   balances: Balances;
   currentStake: StakeInfo;  // Current game stake info
   winnings?: number;         // Lifetime winnings in USD
+  verification?: VerificationStatus;
 }
 
 const stakeInfoSchema = new Schema<StakeInfo>({
@@ -49,6 +57,13 @@ const balancesSchema = new Schema<Balances>({
   sol: { type: Number, default: 0 },
   usdc: { type: Number, default: 0 },
   turing: { type: Number, default: 0 }
+}, { _id: false });
+
+const verificationSchema = new Schema<VerificationStatus>({
+  verified: { type: Boolean, default: false },
+  score: { type: Number, min: 0, max: 1 },
+  lastVerified: { type: Date },
+  method: { type: String, enum: ['hcaptcha', 'recaptcha', 'turnstile'] }
 }, { _id: false });
 
 const participantSchema = new Schema<Participant>({
@@ -91,7 +106,8 @@ const participantSchema = new Schema<Participant>({
       currency: 'usdc',
       tokenAmount: 0
     })
-  },  winnings: { type: Number, default: 0 }
+  },  winnings: { type: Number, default: 0 },
+  verification: { type: verificationSchema }
 });
 
 // Add non-unique index for querying by address

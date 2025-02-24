@@ -13,17 +13,29 @@ interface MatchingParticipant {
 export type GameMode = 'casual' | 'ranked' | 'tournament';
 
 // Generic matching criteria function type
-type MatchCriteria = (p1: MatchingParticipant, p2: MatchingParticipant) => boolean;
+type MatchCriteriaFn = (p1: MatchingParticipant, p2: MatchingParticipant) => boolean;
+
+interface WaitingUser {
+  participant: Participant;
+  verificationScore: number;
+  joinedAt: Date;
+  socketId: string;
+}
+
+interface MatchCriteria {
+  minVerificationScore: number;
+  stakingRequired: boolean;
+}
 
 class MatchingPool {
   private participants: MatchingParticipant[] = [];
   private aiParticipants: Participant[] = [];  // Cached AI participants
-  private matchCriteria: MatchCriteria;
+  private matchCriteria: MatchCriteriaFn;
   private MIN_MATCH_DELAY = 3000;
   private MAX_MATCH_DELAY = 8000;
   private AI_MATCH_CHANCE = 0.5;
 
-  constructor(matchCriteria: MatchCriteria) {
+  constructor(matchCriteria: MatchCriteriaFn) {
     this.matchCriteria = matchCriteria;
     this.initializeAIParticipants();
   }
@@ -309,7 +321,6 @@ private async createMatch(
 }
 
 class EnhancedMatchingEngine {
-  // Add verification score to matching criteria
   private matchParticipants(p1: WaitingUser, p2: WaitingUser, criteria: MatchCriteria): boolean {
     const verificationMatch = 
       p1.verificationScore >= criteria.minVerificationScore && 

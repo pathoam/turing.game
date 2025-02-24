@@ -5,7 +5,6 @@ import { createAdapter } from '@socket.io/mongo-adapter';
 import dotenv from 'dotenv';
 import { chatSession } from './models/chatSession';
 import { Message } from './models/message';
-import Anthropic from '@anthropic-ai/sdk';
 import axios from 'axios';
 import { handleSendMessage } from './handlers/message';
 import { initParticipant, updateParticipants, editParticipant } from './handlers/participant';
@@ -30,10 +29,6 @@ async function main() {
   await mongoose.connect(MONGODB_URI);
   console.log('Connected to MongoDB');
   await initializeDatabase();
-
-  const anthropic = new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY!, // Make sure this is in your .env file
-  });
 
   // Create HTTP server
   const httpServer = createServer();
@@ -233,33 +228,41 @@ async function main() {
       console.log('Server received fetch_participants request for:', address);
       try {
         // Get the user participant
-        const user = await Participant.findOne({ address, role: 'user' });
-        if (!user) {
+        const userDoc = await Participant.findOne({ address, role: 'user' });
+        if (!userDoc) {
           socket.emit('error', 'User not found');
           return;
         }
-    
+
+        // Convert Mongoose document to plain object
+        const user = userDoc.toObject();
+
         // Get all assistant participants for this user
-        const assistantParticipants = await Participant.find({ 
+        const assistantParticipantDocs = await Participant.find({ 
           address, 
           role: 'assistant' 
         });
-    
-        // Get the corresponding assistant configs
-        const assistantResponses = (await Promise.all(
-          assistantParticipants.map(async (participant) => {
-            const assistant = await Assistant.findOne({ id: participant.id });
-            return assistant ? { participant, assistant } : null;
+
+        // Get the corresponding assistant configs and convert to plain objects
+        const assistantResponses = await Promise.all(
+          assistantParticipantDocs.map(async (participantDoc) => {
+            const assistantDoc = await Assistant.findOne({ id: participantDoc.id });
+            if (!assistantDoc) return null;
+
+            return {
+              participant: participantDoc.toObject(),
+              assistant: assistantDoc.toObject()
+            };
           })
-        )).filter((response): response is AssistantResponse => response !== null);
-    
+        );
+
         const response: ParticipantsResponse = {
           user,
-          assistants: assistantResponses
+          assistants: assistantResponses.filter((r) => r !== null) as AssistantResponse[]
         };
-    
+
         socket.emit('participants_data', response);
-        console.log(response)
+        console.log(response);
       } catch (error) {
         console.error('Error fetching participants:', error);
         socket.emit('error', 'Failed to fetch participants data');

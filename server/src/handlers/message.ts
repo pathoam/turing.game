@@ -6,6 +6,7 @@ import { Assistant } from '../models/assistant'
 import axios from 'axios';
 import { Anthropic } from '@anthropic-ai/sdk';
 import { Server, Socket } from 'socket.io';
+import OpenAI from 'openai';
 
 export async function createMessage(
   sessionId: string,
@@ -160,39 +161,30 @@ async function getAIResponse(sessionId: string, assistantId: string): Promise<st
 }
 
 async function handleOpenAIResponse(assistant: any, chatHistory: any[]): Promise<string> {
-  const response = await axios.post(
-    assistant.apiUrl,
-    {
+  try {
+    const openai = new OpenAI({
+      apiKey: assistant.apiKey,
+      baseURL: assistant.apiUrl // Optional, if using a different base URL
+    });
+
+    const response = await openai.chat.completions.create({
       model: assistant.modelName,
       messages: chatHistory,
       ...assistant.params
-    },
-    {
-      headers: {
-        'Authorization': `Bearer ${assistant.apiKey}`,
-        'Content-Type': 'application/json'
-      }
-    }
-  );
-  return response.data.choices[0].message.content;
-}
+    });
 
-// async function handleAnthropicResponse(assistant: any, chatHistory: any[]): Promise<string> {
-//   const anthropic = new Anthropic({
-//     apiKey: assistant.apiKey
-//   });
-//   const messages = chatHistory.map(msg => ({
-//     role: msg.role === 'assistant' ? 'assistant' : 'user',
-//     content: msg.content
-//   }));
-//   const response = await anthropic.messages.create({
-//     model: assistant.modelName,
-//     messages: messages,
-//     system: assistant.systemMsg,
-//     ...assistant.params
-//   });
-//   return response.content[0].text;
-// }
+    console.log('OpenAI API Response:', response);
+
+    if (!response.choices[0]?.message?.content) {
+      throw new Error('No response content received from OpenAI');
+    }
+
+    return response.choices[0].message.content;
+  } catch (error) {
+    console.error('OpenAI API Error:', error);
+    throw error;
+  }
+}
 
 async function handleCustomResponse(assistant: any, chatHistory: any[]): Promise<string> {
   const response = await axios.post(
