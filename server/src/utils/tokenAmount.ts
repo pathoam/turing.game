@@ -64,4 +64,8 @@ export class TokenAmount {
     public isZero(): boolean {
         return this.nativeAmount === BigInt(0);
     }
+
+    public getDecimals(): number {
+        return this.decimals;
+    }
 } 

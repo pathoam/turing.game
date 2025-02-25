@@ -147,7 +147,7 @@ participantSchema.methods.updateBalance = function(
         tokenAddress,
         chainId,
         amount: "0",
-        decimals: amount.decimals
+        decimals: amount.getDecimals()
     };
     
     const currentAmount = new TokenAmount(currentBalance.amount, currentBalance.decimals);
