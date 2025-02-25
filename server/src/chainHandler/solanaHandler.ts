@@ -1,20 +1,93 @@
-import { Connection } from '@solana/web3.js';
+import { Connection, PublicKey } from '@solana/web3.js';
 import { ChainHandler, TransactionResult, BalanceResponse } from './chainHandler';
 import { Chain, Token } from '../utils/balances';
+
+interface HeliusAsset {
+    id: string;
+    content: {
+        metadata: {
+            symbol: string;
+        };
+    };
+    token_info?: {
+        balance: string;
+        decimals: number;
+    };
+}
+
+interface HeliusResponse {
+    result: {
+        items: HeliusAsset[];
+        nativeBalance: {
+            lamports: number;
+        };
+    };
+}
 
 export class SolanaHandler extends ChainHandler {
     private connection: Connection;
 
-    constructor(chain: Chain, apiKey: string) {
+    constructor(chain: Chain, apiKey: string, treasuryAddress: string) {
         const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
-        super(chain, rpcUrl);
+        super(chain, rpcUrl, treasuryAddress);
         this.connection = new Connection(rpcUrl, 'confirmed');
+    }
+
+    async getTokenBalances(address: string, tokens: Token[]): Promise<BalanceResponse> {
+        try {
+            const response = await fetch(this.chain.rpc.url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: 'helius-query',
+                    method: 'getAssetsByOwner',
+                    params: {
+                        ownerAddress: address,
+                        displayOptions: {
+                            showFungible: true,
+                            showNativeBalance: true
+                        }
+                    }
+                })
+            });
+
+            const { result } = (await response.json()) as HeliusResponse;
+            const balances: BalanceResponse = {};
+
+            // Handle native SOL balance
+            const nativeToken = tokens.find(t => t.symbol === 'SOL');
+            if (nativeToken) {
+                balances[nativeToken.address] = result.nativeBalance.lamports / 10 ** nativeToken.decimals;
+            }
+
+            // Handle other tokens
+            for (const token of tokens) {
+                if (token.symbol === 'SOL') continue;
+                
+                const asset = result.items.find(item => 
+                    item.content?.metadata?.symbol === token.symbol
+                );
+
+                if (asset?.token_info) {
+                    balances[token.address] = Number(asset.token_info.balance) / 10 ** token.decimals;
+                } else {
+                    balances[token.address] = 0;
+                }
+            }
+
+            return balances;
+        } catch (error) {
+            console.error('Error fetching Solana token balances:', error);
+            throw error;
+        }
     }
 
     async getBalance(address: string, token: Token): Promise<number> {
         try {
             if (token.symbol === 'SOL') {
-                const balance = await this.connection.getBalance(address);
+                const pubKey = new PublicKey(address);
+                const balance = await this.connection.getBalance(pubKey);
                 return balance / 10 ** token.decimals;
             }
             
@@ -56,5 +129,15 @@ export class SolanaHandler extends ChainHandler {
                 error: error instanceof Error ? error.message : 'Unknown error'
             };
         }
+    }
+
+    async startEventListener(): Promise<void> {
+        // TODO: Implement Solana event listening
+        console.log('Solana event listener started');
+    }
+
+    async stopEventListener(): Promise<void> {
+        // TODO: Clean up any subscriptions
+        console.log('Solana event listener stopped');
     }
 }

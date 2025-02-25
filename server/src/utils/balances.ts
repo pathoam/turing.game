@@ -1,37 +1,57 @@
-export interface Chain {
-    id: number | string;  // number for EVM, string for others
-    name: string;
-    nativeToken: string;
-    type: 'evm' | 'solana';
-    rpc?: string;
+export interface Token {
+    address: string;
+    symbol: string;
+    decimals: number;
 }
 
-export const CHAINS = {
-    ETHEREUM: {
-        id: 1,
-        name: 'Ethereum',
-        nativeToken: 'ETH',
-        type: 'evm'
-    },
-    ARBITRUM: {
+export interface Chain {
+    id: string | number;
+    name: string;
+    nativeToken: string;
+    rpc: {
+        url: string;     // HTTP URL
+        wsUrl: string;   // WebSocket URL
+        apiKey: string;  // API key
+    };
+    type: 'evm' | 'solana';
+}
+
+// Example chain configurations
+export const CHAINS: Record<string, Chain> = {
+    arbitrum: {
         id: 42161,
         name: 'Arbitrum',
         nativeToken: 'ETH',
+        rpc: {
+            url: `https://arb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_ARBITRUM_KEY}`,
+            wsUrl: `wss://arb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_ARBITRUM_KEY}`,
+            apiKey: process.env.ALCHEMY_ARBITRUM_KEY!
+        },
         type: 'evm'
     },
-    BASE: {
+    base: {
         id: 8453,
         name: 'Base',
         nativeToken: 'ETH',
+        rpc: {
+            url: `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_BASE_KEY}`,
+            wsUrl: `wss://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_BASE_KEY}`,
+            apiKey: process.env.ALCHEMY_BASE_KEY!
+        },
         type: 'evm'
     },
-    SOLANA: {
-        id: '4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZ',  // Solana mainnet
+    solana: {
+        id: '4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZ',
         name: 'Solana',
         nativeToken: 'SOL',
+        rpc: {
+            url: `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`,
+            wsUrl: `wss://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`,
+            apiKey: process.env.HELIUS_API_KEY!
+        },
         type: 'solana'
     }
-} as const;
+};
 
 export interface Token {
     symbol: string;
@@ -46,43 +66,43 @@ export const TOKENS = {
         symbol: 'ARB',
         address: '0x912CE59144191C1204E64559FE8253a0e49E6548',
         decimals: 18,
-        chain: CHAINS.ARBITRUM
+        chain: CHAINS.arbitrum
     },
     BASE: {
         symbol: 'BASE', 
         address: '0x4200000000000000000000000000000000000006',
         decimals: 18,
-        chain: CHAINS.BASE
+        chain: CHAINS.base
     },
     ARB_USDC: {
         symbol: 'USDC',
         address: '0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8',
         decimals: 6,
-        chain: CHAINS.ARBITRUM
+        chain: CHAINS.arbitrum
     },
     BASE_USDC: {
         symbol: 'USDC',
         address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
         decimals: 6,
-        chain: CHAINS.BASE
+        chain: CHAINS.base
     },
     SOL: {
         symbol: 'SOL',
         address: 'So11111111111111111111111111111111111111112',
         decimals: 9,
-        chain: CHAINS.SOLANA
+        chain: CHAINS.solana
     },
     SOL_USDC: {
         symbol: 'USDC',
         address: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
         decimals: 6,
-        chain: CHAINS.SOLANA
+        chain: CHAINS.solana
     },
     TURING: {
         symbol: 'TURING',
         address: 'tuRinGx3gVuGbXwYtKsxR8xz6JQVGbZrEBGkZwyTDt1v',
         decimals: 9,
-        chain: CHAINS.SOLANA
+        chain: CHAINS.solana
     }
 } as const;
 
