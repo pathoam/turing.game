@@ -1,7 +1,10 @@
+import { ChainManager } from '../chainHandler/chainManager';
+
 export interface Token {
-    address: string;
     symbol: string;
+    address: string;
     decimals: number;
+    chain: Chain;
 }
 
 export interface Chain {
@@ -14,6 +17,7 @@ export interface Chain {
         apiKey: string;  // API key
     };
     type: 'evm' | 'solana';
+    treasuryAddress: string;  // Add treasury address per chain
 }
 
 // Example chain configurations
@@ -27,7 +31,8 @@ export const CHAINS: Record<string, Chain> = {
             wsUrl: `wss://arb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_ARBITRUM_KEY}`,
             apiKey: process.env.ALCHEMY_ARBITRUM_KEY!
         },
-        type: 'evm'
+        type: 'evm',
+        treasuryAddress: process.env.ARBITRUM_TREASURY_ADDRESS!
     },
     base: {
         id: 8453,
@@ -38,7 +43,8 @@ export const CHAINS: Record<string, Chain> = {
             wsUrl: `wss://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_BASE_KEY}`,
             apiKey: process.env.ALCHEMY_BASE_KEY!
         },
-        type: 'evm'
+        type: 'evm',
+        treasuryAddress: process.env.BASE_TREASURY_ADDRESS!
     },
     solana: {
         id: '4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZ',
@@ -49,16 +55,10 @@ export const CHAINS: Record<string, Chain> = {
             wsUrl: `wss://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`,
             apiKey: process.env.HELIUS_API_KEY!
         },
-        type: 'solana'
+        type: 'solana',
+        treasuryAddress: process.env.SOLANA_TREASURY_ADDRESS!
     }
 };
-
-export interface Token {
-    symbol: string;
-    address: string;
-    decimals: number;
-    chain: Chain;
-}
 
 // Define our supported tokens with chain info
 export const TOKENS = {
@@ -97,12 +97,6 @@ export const TOKENS = {
         address: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
         decimals: 6,
         chain: CHAINS.solana
-    },
-    TURING: {
-        symbol: 'TURING',
-        address: 'tuRinGx3gVuGbXwYtKsxR8xz6JQVGbZrEBGkZwyTDt1v',
-        decimals: 9,
-        chain: CHAINS.solana
     }
 } as const;
 
@@ -114,27 +108,36 @@ export const TOKENS = {
 // }
 
 export class Balances {
-    private balances: Map<string, bigint>;  // Store native amounts
+    private balances: Map<string, bigint>;  // Store native amounts by token address
     private usdValue: number;
+    private chainManager: ChainManager;
 
     private static rates: Map<string, number> = new Map();
     private static lastRateUpdate: number = 0;
     private static readonly RATE_UPDATE_INTERVAL = 1 * 60 * 1000; // every 1 minute
 
-    constructor(initialBalances?: { [tokenAddress: string]: string | number }) {
+    constructor(chainManager: ChainManager, initialBalances?: Record<string, string | number>) {
         this.balances = new Map();
         this.usdValue = 0;
+        this.chainManager = chainManager;
 
         if (initialBalances) {
             Object.entries(initialBalances).forEach(([address, amount]) => {
-                const token = Object.values(TOKENS).find(t => t.address === address);
+                const token = this.findTokenByAddress(address);
                 if (token) {
-                    // Convert to native amount and store
                     this.balances.set(address, this.toNativeAmount(amount, token.decimals));
                 }
             });
         }
         this.calculateUsdValue();
+    }
+
+    private findTokenByAddress(address: string): Token | undefined {
+        return Object.values(TOKENS).find(t => t.address.toLowerCase() === address.toLowerCase());
+    }
+
+    private findTokenBySymbol(symbol: string): Token | undefined {
+        return Object.values(TOKENS).find(t => t.symbol === symbol);
     }
 
     // Convert decimal amount to native amount
@@ -148,14 +151,14 @@ export class Balances {
         return Number(amount) / 10 ** decimals;
     }
 
-    // Get balance in native units
+    // Get balance in native units by token address
     public getNativeBalance(tokenAddress: string): bigint {
         return this.balances.get(tokenAddress) ?? BigInt(0);
     }
 
-    // Get balance in decimal units
+    // Get balance in decimal units by token address
     public getDecimalBalance(tokenAddress: string): number {
-        const token = Object.values(TOKENS).find(t => t.address === tokenAddress);
+        const token = this.findTokenByAddress(tokenAddress);
         if (!token) return 0;
         
         const nativeAmount = this.balances.get(tokenAddress) ?? BigInt(0);
@@ -164,66 +167,58 @@ export class Balances {
 
     // Get balance by token symbol
     public getBalanceBySymbol(symbol: string): number {
-        const token = Object.values(TOKENS).find(t => t.symbol === symbol);
+        const token = this.findTokenBySymbol(symbol);
         if (!token) return 0;
         return this.getDecimalBalance(token.address);
     }
 
-    // Update balance
-    public setBalance(tokenAddress: string, amount: string | number | bigint): void {
-        const token = Object.values(TOKENS).find(t => t.address === tokenAddress);
+    // Get all balances in decimal form
+    public getAllBalances(): Record<string, number> {
+        const result: Record<string, number> = {};
+        for (const [address, amount] of this.balances) {
+            const token = this.findTokenByAddress(address);
+            if (token) {
+                result[token.symbol] = this.toDecimalAmount(amount, token.decimals);
+            }
+        }
+        return result;
+    }
+
+    // Update a balance by token address
+    public updateBalance(tokenAddress: string, newAmount: string | number): void {
+        const token = this.findTokenByAddress(tokenAddress);
         if (!token) return;
 
-        let nativeAmount: bigint;
-        if (typeof amount === 'bigint') {
-            nativeAmount = amount;
-        } else {
-            nativeAmount = this.toNativeAmount(amount, token.decimals);
-        }
-        
-        this.balances.set(tokenAddress, nativeAmount);
+        this.balances.set(tokenAddress, this.toNativeAmount(newAmount, token.decimals));
         this.calculateUsdValue();
     }
 
-    // Static rate management
-    public static async updateRates(): Promise<void> {
-        const now = Date.now();
-        if (now - Balances.lastRateUpdate < Balances.RATE_UPDATE_INTERVAL) {
-            return;
-        }
-
-        try {
-            // Implement rate fetching from an oracle or price feed
-            // For now using placeholder static rates
-            Balances.rates.set('SOL', 20);
-            Balances.rates.set('ETH', 2000);
-            Balances.rates.set('USDC', 1);
-            Balances.lastRateUpdate = now;
-        } catch (error) {
-            console.error('Failed to update token rates:', error);
-        }
-    }
-
-    private calculateUsdValue(): void {
-        this.usdValue = Array.from(this.balances.entries()).reduce((total, [address, amount]) => {
-            const token = Object.values(TOKENS).find(t => t.address === address);
-            if (token && Balances.rates.has(token.symbol)) {
-                const decimalAmount = this.toDecimalAmount(amount, token.decimals);
-                return total + (decimalAmount * (Balances.rates.get(token.symbol) ?? 0));
-            }
-            return total;
-        }, 0);
-    }
-
+    // Get total USD value of all balances
     public getUsdValue(): number {
         return this.usdValue;
     }
 
-    public toJSON(): { [tokenAddress: string]: string } {
-        const result: { [tokenAddress: string]: string } = {};
-        this.balances.forEach((amount, address) => {
-            result[address] = amount.toString();
-        });
-        return result;
+    private async calculateUsdValue(): Promise<void> {
+        // TODO: Implement price fetching and USD calculation
+        this.usdValue = 0;
+        for (const [address, amount] of this.balances) {
+            const token = this.findTokenByAddress(address);
+            if (token) {
+                const price = await this.getTokenPrice(token.symbol);
+                const decimalAmount = this.toDecimalAmount(amount, token.decimals);
+                this.usdValue += decimalAmount * price;
+            }
+        }
+    }
+
+    private async getTokenPrice(symbol: string): Promise<number> {
+        const token = this.findTokenBySymbol(symbol);
+        if (!token) return 0;
+        
+        const handler = this.chainManager.getHandler(token.chain.id);
+        if (!handler) return 0;
+
+        const [price] = await handler.getTokenPrices([symbol]);
+        return price.usdPrice;
     }
 }

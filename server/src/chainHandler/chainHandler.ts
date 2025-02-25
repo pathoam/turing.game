@@ -20,6 +20,12 @@ export interface TransactionEvent {
     txHash: string;
 }
 
+export interface TokenPrice {
+    symbol: string;
+    usdPrice: number;
+    lastUpdated: number;
+}
+
 export abstract class ChainHandler extends EventEmitter {
     protected readonly chain: Chain;
     protected readonly treasuryAddress: string;
@@ -43,6 +49,7 @@ export abstract class ChainHandler extends EventEmitter {
         amount: number
     ): Promise<TransactionResult>;
     abstract getTokenBalances(address: string, tokens: Token[]): Promise<BalanceResponse>;
+    abstract getTokenPrices(symbols: string[]): Promise<TokenPrice[]>;
 
     protected emitDeposit(event: TransactionEvent) {
         if (event.to === this.treasuryAddress) {

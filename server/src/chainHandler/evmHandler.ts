@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
-import { ChainHandler, TransactionResult, BalanceResponse, TransactionEvent } from './chainHandler';
-import { Chain, Token } from '../utils/balances';
+import { ChainHandler, TransactionResult, BalanceResponse, TransactionEvent, TokenPrice } from './chainHandler';
+import { Chain, Token, TOKENS } from '../utils/balances';
 import { WebSocketProvider } from '@ethersproject/providers';
 import { Contract } from '@ethersproject/contracts';
 import { Alchemy, Network } from 'alchemy-sdk';
@@ -12,11 +12,26 @@ const ERC20_ABI = [
     'function transfer(address to, uint256 amount) returns (bool)'
 ];
 
+interface AlchemyPriceResponse {
+    data: Array<{
+        symbol: string;
+        prices: Array<{
+            currency: string;
+            value: string;
+            lastUpdatedAt: string;
+        }>;
+        error: string | null;
+    }>;
+}
+
 export class EVMHandler extends ChainHandler {
     private wsProvider: WebSocketProvider;
     private provider: ethers.JsonRpcProvider;  // For transactions
     private contracts: Map<string, Contract> = new Map();
     private alchemy: Alchemy;
+    private priceCache: Map<string, TokenPrice> = new Map();
+    private lastPriceUpdate: number = 0;
+    private readonly PRICE_UPDATE_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
     constructor(chain: Chain, rpcUrl: string, treasuryAddress: string) {
         super(chain, rpcUrl, treasuryAddress);
@@ -30,12 +45,30 @@ export class EVMHandler extends ChainHandler {
         });
     }
 
-    private getAlchemyNetwork(chainId: string | number): Network {
+    protected getAlchemyNetwork(chainId: string | number): Network {
         switch(chainId) {
             case 42161: return Network.ARB_MAINNET;
             case 8453: return Network.BASE_MAINNET;
             default: throw new Error(`Unsupported chain ID: ${chainId}`);
         }
+    }
+
+    private decodeAddress(hexTopic: string): string {
+        const hex = ethers.dataSlice(hexTopic, 12); // remove leading zeros
+        return ethers.getAddress(hex);
+    }
+
+    private getTokenSymbol(tokenAddress: string): string {
+        if (tokenAddress === this.treasuryAddress) {
+            return this.chain.nativeToken;
+        }
+        
+        const token = Object.values(TOKENS).find((t: Token) => 
+            t.address.toLowerCase() === tokenAddress.toLowerCase() &&
+            t.chain.id === this.chain.id
+        );
+        
+        return token?.symbol || 'UNKNOWN';
     }
 
     async startEventListener(): Promise<void> {
@@ -51,13 +84,12 @@ export class EVMHandler extends ChainHandler {
                 '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef' // Transfer event topic
             ]
         }, (log) => {
-            // Process transfer event
             const event: TransactionEvent = {
                 chainId: this.getChainId().toString(),
-                from: log.topics[1],
-                to: log.topics[2],
-                tokenSymbol: 'ETH', // Need to look up actual token
-                amount: parseInt(log.data),
+                from: this.decodeAddress(log.topics[1]),
+                to: this.decodeAddress(log.topics[2]),
+                tokenSymbol: this.getTokenSymbol(log.address),
+                amount: Number(ethers.formatUnits(log.data, 18)), // TODO: Get correct decimals
                 txHash: log.transactionHash
             };
 
@@ -211,5 +243,45 @@ export class EVMHandler extends ChainHandler {
             console.error('Error fetching token balances:', error);
             throw error;
         }
+    }
+
+    async getTokenPrices(symbols: string[]): Promise<TokenPrice[]> {
+        const now = Date.now();
+        if (now - this.lastPriceUpdate > this.PRICE_UPDATE_INTERVAL) {
+            try {
+                const response = await fetch(
+                    `https://api.g.alchemy.com/prices/v1/${this.chain.rpc.apiKey}/tokens/by-symbol?symbols=${symbols.join(',')}`,
+                    {
+                        method: 'GET',
+                        headers: { 'Accept': 'application/json' }
+                    }
+                );
+
+                const { data } = await response.json() as AlchemyPriceResponse;
+                
+                data.forEach(token => {
+                    if (!token.error && token.prices.length > 0) {
+                        const usdPrice = token.prices.find(p => p.currency === 'USD');
+                        if (usdPrice) {
+                            this.priceCache.set(token.symbol, {
+                                symbol: token.symbol,
+                                usdPrice: parseFloat(usdPrice.value),
+                                lastUpdated: now
+                            });
+                        }
+                    }
+                });
+
+                this.lastPriceUpdate = now;
+            } catch (error) {
+                console.error('Failed to update token prices:', error);
+            }
+        }
+
+        return symbols.map(symbol => this.priceCache.get(symbol) || {
+            symbol,
+            usdPrice: 0,
+            lastUpdated: 0
+        });
     }
 }

@@ -1,5 +1,5 @@
 import { Connection, PublicKey } from '@solana/web3.js';
-import { ChainHandler, TransactionResult, BalanceResponse } from './chainHandler';
+import { ChainHandler, TransactionResult, BalanceResponse, TokenPrice } from './chainHandler';
 import { Chain, Token } from '../utils/balances';
 
 interface HeliusAsset {
@@ -24,8 +24,30 @@ interface HeliusResponse {
     };
 }
 
+interface HeliusAssetResponse {
+    result: {
+        items: Array<{
+            id: string;
+            content: {
+                metadata: {
+                    symbol: string;
+                };
+            };
+            token_info?: {
+                price_info?: {
+                    price_per_token: number;
+                    currency: string;
+                };
+            };
+        }>;
+    };
+}
+
 export class SolanaHandler extends ChainHandler {
     private connection: Connection;
+    private priceCache: Map<string, TokenPrice> = new Map();
+    private lastPriceUpdate: number = 0;
+    private readonly PRICE_UPDATE_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
     constructor(chain: Chain, apiKey: string, treasuryAddress: string) {
         const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
@@ -139,5 +161,53 @@ export class SolanaHandler extends ChainHandler {
     async stopEventListener(): Promise<void> {
         // TODO: Clean up any subscriptions
         console.log('Solana event listener stopped');
+    }
+
+    async getTokenPrices(symbols: string[]): Promise<TokenPrice[]> {
+        const now = Date.now();
+        if (now - this.lastPriceUpdate > this.PRICE_UPDATE_INTERVAL) {
+            try {
+                const response = await fetch(this.rpcUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        jsonrpc: '2.0',
+                        id: 'helius-query',
+                        method: 'getAssetsByOwner',
+                        params: {
+                            ownerAddress: this.treasuryAddress,
+                            displayOptions: {
+                                showFungible: true
+                            }
+                        }
+                    })
+                });
+
+                const { result } = await response.json() as HeliusAssetResponse;
+                
+                result.items.forEach(item => {
+                    const symbol = item.content?.metadata?.symbol;
+                    const price = item.token_info?.price_info?.price_per_token;
+                    
+                    if (symbol && price) {
+                        this.priceCache.set(symbol, {
+                            symbol,
+                            usdPrice: price,
+                            lastUpdated: now
+                        });
+                    }
+                });
+
+                this.lastPriceUpdate = now;
+            } catch (error) {
+                console.error('Failed to update Solana token prices:', error);
+            }
+        }
+
+        return symbols.map(symbol => this.priceCache.get(symbol) || {
+            symbol,
+            usdPrice: 0,
+            lastUpdated: 0
+        });
     }
 }

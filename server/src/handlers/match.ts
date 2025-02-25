@@ -31,9 +31,11 @@ class MatchingPool {
   private participants: MatchingParticipant[] = [];
   private aiParticipants: Participant[] = [];  // Cached AI participants
   private matchCriteria: MatchCriteriaFn;
-  private MIN_MATCH_DELAY = 3000;
-  private MAX_MATCH_DELAY = 8000;
-  private AI_MATCH_CHANCE = 0.5;
+  private readonly maxStakeDifference = 5; // $5 USD difference allowed
+  private readonly maxEloDifference = 200; // 200 ELO points difference allowed
+  private readonly MIN_MATCH_DELAY = 3000;
+  private readonly MAX_MATCH_DELAY = 8000;
+  private readonly AI_MATCH_CHANCE = 0.5;
 
   constructor(matchCriteria: MatchCriteriaFn) {
     this.matchCriteria = matchCriteria;
@@ -161,6 +163,8 @@ export class MatchingEngine {
   private pools: Map<GameMode, MatchingPool> = new Map();
   private io: Server;
   private AI_REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
+  private readonly maxStakeDifference = 5; // $5 USD difference allowed
+  private readonly maxEloDifference = 200; // 200 ELO points difference allowed
 
   constructor(io: Server) {
     this.io = io;
@@ -179,35 +183,31 @@ export class MatchingEngine {
   private initializePools() {
     // Casual - match zero stakes together, and similar non-zero stakes together
     this.pools.set('casual', new MatchingPool((p1, p2) => {
-      const stake1 = p1.participant.currentStake?.amount || 0;
-      const stake2 = p2.participant.currentStake?.amount || 0;
+      const stake1 = p1.participant.currentStake?.amountUsd || 0;
+      const stake2 = p2.participant.currentStake?.amountUsd || 0;
 
       // Match zero stakes only with zero stakes
       if (stake1 === 0 || stake2 === 0) {
         return stake1 === stake2;
       }
 
-      // For non-zero stakes, ensure they're within 20% of each other
-      const maxStake = Math.max(stake1, stake2);
-      const stakeDiff = Math.abs(stake1 - stake2);
-      return stakeDiff / maxStake <= 0.2;
+      // For non-zero stakes, allow some variance
+      return Math.abs(stake1 - stake2) <= this.maxStakeDifference;
     }));
 
     // Ranked - require non-zero stakes, match by ELO and stakes
     this.pools.set('ranked', new MatchingPool((p1, p2) => {
-      const stake1 = p1.participant.currentStake?.amount || 0;
-      const stake2 = p2.participant.currentStake?.amount || 0;
+      const stake1 = p1.participant.currentStake?.amountUsd || 0;
+      const stake2 = p2.participant.currentStake?.amountUsd || 0;
 
       // Require non-zero stakes
       if (stake1 === 0 || stake2 === 0) {
         return false;
       }
 
-      const maxStake = Math.max(stake1, stake2);
-      const stakeDiff = Math.abs(stake1 - stake2);
-      const eloDiff = Math.abs(p1.participant.elo - p2.participant.elo);
-      
-      return stakeDiff / maxStake <= 0.2 && eloDiff <= 200;
+      // Check stake similarity and ELO
+      return Math.abs(stake1 - stake2) <= this.maxStakeDifference &&
+             Math.abs(p1.participant.elo - p2.participant.elo) <= this.maxEloDifference;
     }));
 
     // Tournament - require non-zero stakes, exact matches only
@@ -238,7 +238,7 @@ export class MatchingEngine {
     }
 
     // Validate stake requirements
-    const stake = participant.currentStake?.amount || 0;
+    const stake = participant.currentStake?.amountUsd || 0;
     if ((gameMode === 'ranked' || gameMode === 'tournament') && stake === 0) {
       throw new Error(`${gameMode} mode requires a non-zero stake`);
     }
@@ -319,7 +319,7 @@ class EnhancedMatchingEngine {
       p2.verificationScore >= criteria.minVerificationScore;
       
     const stakingMatch = !criteria.stakingRequired || 
-      (p1.participant.currentStake?.amount > 0 && p2.participant.currentStake?.amount > 0);
+      (p1.participant.currentStake?.amountUsd > 0 && p2.participant.currentStake?.amountUsd > 0);
       
     return verificationMatch && stakingMatch;
   }

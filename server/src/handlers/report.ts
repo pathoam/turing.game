@@ -77,19 +77,23 @@ export async function handleReport(socket: Socket, io: Server, params: ReportPar
             address: winner.address,
             alias: winner.alias,
             role: winner.role,
-            balances: gameResult.winner.balances
+            balances: gameResult.winner.balances,
+            eloChange: gameResult.winner.eloChange
         },
         loser: {
             id: loser.id,
             address: loser.address,
             alias: loser.alias,
             role: loser.role,
-            balances: gameResult.loser.balances
+            balances: gameResult.loser.balances,
+            eloChange: gameResult.loser.eloChange
         }
     });
 
+    return gameResult;
   } catch (error) {
     console.error('Failed to process report:', error);
     socket.emit('error', error instanceof Error ? error.message : 'Failed to process report');
+    throw error;
   }
 }

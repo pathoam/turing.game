@@ -1,5 +1,6 @@
 import mongoose, { Document, Schema } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
+import { TokenAmount } from '../utils/tokenAmount';
 
 export type Currency = 'sol' | 'usdc' | 'turing';
 
@@ -15,10 +16,20 @@ export interface GameOutcome {
   sessionId: string;
 }
 
+export interface TokenBalance {
+    tokenAddress: string;
+    chainId: string | number;
+    amount: string;  // Store as string to handle large numbers safely
+    decimals: number;
+}
+
 export interface StakeInfo {
-  amount: number;       // Amount in USD
-  currency: Currency;   // Currency used for stake
-  tokenAmount: number;  // Actual amount of tokens based on price
+    amountUsd: number;      // USD value at stake time
+    tokenAddress: string;   // Token contract address
+    chainId: string | number;
+    tokenAmount: string;    // Native token amount (e.g. "5000000" for 5 USDC)
+    decimals: number;       // Token decimals for conversion
+    priceUsd?: number;      // Optional: price at stake time
 }
 
 export interface VerificationStatus {
@@ -41,16 +52,19 @@ export interface Participant extends Document {
   currentStake: StakeInfo;  // Current game stake info
   winnings?: number;         // Lifetime winnings in USD
   verification?: VerificationStatus;
+  updateBalance(tokenAddress: string, amount: TokenAmount, chainId: string | number): Promise<Participant>;
+  getBalance(tokenAddress: string): TokenBalance | undefined;
+  setStake(stake: StakeInfo): Promise<Participant>;
+  clearStake(): Promise<Participant>;
 }
 
 const stakeInfoSchema = new Schema<StakeInfo>({
-  amount: { type: Number, required: true },
-  currency: { 
-    type: String, 
-    required: true, 
-    enum: ['sol', 'usdc', 'turing'] 
-  },
-  tokenAmount: { type: Number, required: true }
+  amountUsd: { type: Number, required: true },
+  tokenAddress: { type: String, required: true },
+  chainId: { type: Schema.Types.Mixed, required: true },
+  tokenAmount: { type: String, required: true },
+  decimals: { type: Number, required: true },
+  priceUsd: { type: Number }
 }, { _id: false });
 
 const balancesSchema = new Schema<Balances>({
@@ -91,22 +105,23 @@ const participantSchema = new Schema<Participant>({
   gamesPlayed: { type: Number, default: 0 },
   wins: { type: Number, default: 0 },
   balances: { 
-    type: balancesSchema, 
-    default: () => ({
-      sol: 0,
-      usdc: 0,
-      turing: 0
-    })
+    type: Map,
+    of: {
+      tokenAddress: String,
+      chainId: Schema.Types.Mixed,
+      amount: String,
+      decimals: Number
+    }
   },
   currentStake: { 
-    type: stakeInfoSchema, 
-    required: true,
-    default: () => ({
-      amount: 0,
-      currency: 'usdc',
-      tokenAmount: 0
-    })
-  },  winnings: { type: Number, default: 0 },
+    amountUsd: Number,
+    tokenAddress: String,
+    chainId: Schema.Types.Mixed,
+    tokenAmount: String,
+    decimals: Number,
+    priceUsd: Number
+  },
+  winnings: { type: Number, default: 0 },
   verification: { type: verificationSchema }
 });
 
@@ -124,22 +139,39 @@ participantSchema.index(
 
 // Helper methods for balance operations
 participantSchema.methods.updateBalance = function(
-  currency: Currency,
-  amount: number
+    tokenAddress: string,
+    amount: TokenAmount,
+    chainId: string | number
 ) {
-  this.balances[currency] += amount;
-  return this.save();
+    const currentBalance = this.balances.get(tokenAddress) || {
+        tokenAddress,
+        chainId,
+        amount: "0",
+        decimals: amount.decimals
+    };
+    
+    const currentAmount = new TokenAmount(currentBalance.amount, currentBalance.decimals);
+    const newAmount = currentAmount.add(amount);
+    
+    if (newAmount.isNegative()) {
+        throw new Error('Insufficient balance');
+    }
+    
+    this.balances.set(tokenAddress, {
+        ...currentBalance,
+        amount: newAmount.toString()
+    });
+    
+    return this.save();
 };
 
-participantSchema.methods.getBalance = function(
-  currency: Currency
-) {
-  return this.balances[currency];
+participantSchema.methods.getBalance = function(tokenAddress: string) {
+    return this.balances.get(tokenAddress);
 };
 
 participantSchema.methods.setStake = function(stake: StakeInfo) {
-  this.currentStake = stake;
-  return this.save();
+    this.currentStake = stake;
+    return this.save();
 };
 
 participantSchema.methods.clearStake = function() {

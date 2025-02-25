@@ -90,7 +90,7 @@ async function main() {
       console.log('Finding match:', {
         participantId: participant.id,
         gameMode,
-        stake: participant.currentStake?.amount || 0
+        stake: participant.currentStake?.amountUsd || 0
       });
     
       try {
@@ -374,6 +374,25 @@ async function main() {
           socket.emit('error', 'Failed to fetch rankings');
         }
       });
+
+    socket.on('matchmaking_started', async ({ participant, gameMode }) => {
+      console.log('Received matchmaking_started event:', {
+        participantId: participant.id,
+        gameMode,
+        stake: participant.currentStake?.amountUsd || 0
+      });
+      try {
+        await matchingEngine.tryMatch(socket, participant, gameMode);
+        socket.emit('matchmaking_started', {
+          participantId: participant.id,
+          gameMode,
+          stake: participant.currentStake?.amountUsd || 0
+        });
+      } catch (error) {
+        console.error('Matchmaking error:', error);
+        socket.emit('error', error instanceof Error ? error.message : 'Failed to start matchmaking');
+      }
+    });
     });
     
     io.listen(PORT);

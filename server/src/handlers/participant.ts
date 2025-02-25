@@ -3,160 +3,180 @@ import { Assistant } from '../models/assistant'
 import { v4 as uuidv4 } from 'uuid';
 import mongoose from 'mongoose';
 import OpenAI from 'openai';
+import { calculateEloChange } from '../utils/elo';
+import { TokenAmount } from '../utils/tokenAmount';
 
 export async function initParticipant(address: string, role: 'user' | 'assistant' = 'user') {
     try {
-      // Check if participant already exists
-      let participant = await Participant.findOne({ address, role });
-  
-      // If no existing participant, create new one
-      if (!participant) {
-        participant = await Participant.create({
-          id: uuidv4(),
-          address,
-          role,
-          status: 'active',
-          elo: 1000, // Starting ELO
-          gamesPlayed: 0,
-          wins: 0,
-          winnings: 0,
-          balances: {
-            sol: 0,
-            usdc: 0,
-            turing: 0
-          }
-        });
-      }
-  
-      return participant;
-    } catch (error) {
-      console.error('Failed to initialize participant:', error);
-      throw error;
-    }
-  }
+        let participant = await Participant.findOne({ address, role });
 
-  export async function editParticipant(
-    participant: Participant,
-    assistant?: Assistant
-  ): Promise<{ participant: Participant; assistant?: Assistant }> {
-    try {
-      // Verify ownership
-      const existingParticipant = await Participant.findOne({ 
-        id: participant.id,
-        address: participant.address
-      });
-  
-      if (!existingParticipant) {
-        throw new Error('Participant not found or unauthorized');
-      }
-  
-      // Update participant
-      const updatedParticipant = await Participant.findOneAndUpdate(
+        if (!participant) {
+            participant = await Participant.create({
+                id: uuidv4(),
+                address,
+                role,
+                status: 'active',
+                elo: 1000,
+                gamesPlayed: 0,
+                wins: 0,
+                winnings: 0,
+                balances: new Map(), // Start with empty balances
+                currentStake: null
+            });
+        }
+
+        return participant;
+    } catch (error) {
+        console.error('Failed to initialize participant:', error);
+        throw error;
+    }
+}
+
+export async function editParticipant(
+  participant: Participant,
+  assistant?: Assistant
+): Promise<{ participant: Participant; assistant?: Assistant }> {
+  try {
+    // Verify ownership
+    const existingParticipant = await Participant.findOne({ 
+      id: participant.id,
+      address: participant.address
+    });
+
+    if (!existingParticipant) {
+      throw new Error('Participant not found or unauthorized');
+    }
+
+    // Update participant
+    const updatedParticipant = await Participant.findOneAndUpdate(
+      { id: participant.id },
+      { $set: participant },
+      { new: true }
+    );
+
+    if (!updatedParticipant) {
+      throw new Error('Failed to update participant');
+    }
+
+    // Update assistant if provided
+    let updatedAssistant;
+    if (assistant) {
+      updatedAssistant = await Assistant.findOneAndUpdate(
         { id: participant.id },
-        { $set: participant },
+        { 
+          $set: {
+            ...assistant,
+            id: participant.id
+          }
+        },
         { new: true }
       );
-  
-      if (!updatedParticipant) {
-        throw new Error('Failed to update participant');
+
+      if (!updatedAssistant) {
+        throw new Error('Assistant not found');
       }
-  
-      // Update assistant if provided
-      let updatedAssistant;
-      if (assistant) {
-        updatedAssistant = await Assistant.findOneAndUpdate(
-          { id: participant.id },
-          { 
-            $set: {
-              ...assistant,
-              id: participant.id
-            }
-          },
-          { new: true }
-        );
-  
-        if (!updatedAssistant) {
-          throw new Error('Assistant not found');
-        }
-      }
-  
-      return {
-        participant: updatedParticipant,
-        assistant: updatedAssistant
-      };
-    } catch (error) {
-      console.error('Failed to edit participant:', error);
-      throw error;
     }
+
+    return {
+      participant: updatedParticipant,
+      assistant: updatedAssistant
+    };
+  } catch (error) {
+    console.error('Failed to edit participant:', error);
+    throw error;
   }
+}
 
 export async function updateParticipants(outcome: GameOutcome) {
     const { winner, loser } = outcome;
     
-    // Calculate winnings based on stakes
-    const maxWinnings = Math.min(
-        winner.currentStake?.amount || 0,
-        loser.currentStake?.amount || 0
-    );
+    if (!winner.currentStake || !loser.currentStake) {
+        throw new Error('Missing stake information');
+    }
 
-    // Calculate ELO changes
-    const expectedScoreWinner = 1 / (1 + Math.pow(10, (loser.elo - winner.elo) / 400));
-    const K = 32;
-    const eloChangeWinner = Math.round(K * (1 - expectedScoreWinner));
-    const eloChangeLoser = -eloChangeWinner;
-
-    // Calculate rewards
-    const winnerWinnings = maxWinnings * 0.95; // 5% fee
-    const turingBonusWinner = maxWinnings * 0.25;
-    const turingConsolation = maxWinnings * 0.125;
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
     try {
-        // Update winner without transaction
-        const updatedWinner = await Participant.findOneAndUpdate(
-            { id: winner.id },
+        // Calculate winnings in USD
+        const maxWinnings = Math.min(
+            winner.currentStake.amountUsd,
+            loser.currentStake.amountUsd
+        );
+
+        const winnerWinnings = maxWinnings * 0.95; // 5% fee
+        const turingBonus = maxWinnings * 0.1;     // 10% TURING bonus
+
+        // Update winner
+        const eloChange = calculateEloChange(winner.elo, loser.elo, 1);
+        await Participant.findOneAndUpdate(
+            { _id: winner._id },
             {
                 $inc: {
-                    elo: eloChangeWinner,
+                    elo: eloChange,
                     gamesPlayed: 1,
                     wins: 1,
-                    [`balances.${winner.currentStake?.currency || 'usdc'}`]: winnerWinnings,
-                    'balances.turing': turingBonusWinner
+                    winnings: winnerWinnings
                 },
                 $unset: { currentStake: "" }
             },
-            { new: true }
+            { session }
         );
 
-        // Update loser without transaction
-        const updatedLoser = await Participant.findOneAndUpdate(
-            { id: loser.id },
+        // Update winner's token balance
+        const winnerStake = new TokenAmount(
+            winner.currentStake.tokenAmount,
+            winner.currentStake.decimals
+        );
+        await winner.updateBalance(
+            winner.currentStake.tokenAddress,
+            winnerStake,
+            winner.currentStake.chainId
+        );
+
+        // Update loser
+        await Participant.findOneAndUpdate(
+            { _id: loser._id },
             {
                 $inc: {
-                    elo: eloChangeLoser,
-                    gamesPlayed: 1,
-                    [`balances.${loser.currentStake?.currency || 'usdc'}`]: -maxWinnings,
-                    'balances.turing': turingConsolation
+                    elo: -eloChange,
+                    gamesPlayed: 1
                 },
                 $unset: { currentStake: "" }
             },
-            { new: true }
+            { session }
         );
 
-        if (!updatedWinner || !updatedLoser) {
-            throw new Error('Failed to update participants');
-        }
+        // Update loser's token balance (negative amount)
+        const loserStake = new TokenAmount(
+            `-${loser.currentStake.tokenAmount}`,
+            loser.currentStake.decimals
+        );
+        await loser.updateBalance(
+            loser.currentStake.tokenAddress,
+            loserStake,
+            loser.currentStake.chainId
+        );
+
+        await session.commitTransaction();
+
+        // Return updated balances
         return {
             winner: {
-                balances: updatedWinner.balances,
-                eloChange: eloChangeWinner
+                balances: winner.balances,
+                eloChange: eloChange
             },
             loser: {
-                balances: updatedLoser.balances,
-                eloChange: eloChangeLoser
+                balances: loser.balances,
+                eloChange: -eloChange
             }
         };
     } catch (error) {
+        await session.abortTransaction();
+        console.error('Failed to update participants:', error);
         throw error;
+    } finally {
+        session.endSession();
     }
 }
 

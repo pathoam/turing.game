@@ -3,38 +3,33 @@ import { CHAINS, Chain, Token } from '../utils/balances';
 import { EVMHandler } from './evmHandler';
 import { SolanaHandler } from './solanaHandler';
 import { ChainHandler, TransactionEvent, TransactionResult } from './chainHandler';
+import { ArbitrumHandler } from './arbitrumHandler';
+import { BaseHandler } from './baseHandler';
 
 export class ChainManager extends EventEmitter {
     private static instance: ChainManager;
     private handlers: Map<string, ChainHandler> = new Map();
-    private treasuryAddresses: Record<string, string>;
 
-    private constructor(treasuryAddresses: Record<string, string>) {
+    private constructor() {
         super();
-        this.treasuryAddresses = treasuryAddresses;
     }
 
-    public static getInstance(treasuryAddresses?: Record<string, string>): ChainManager {
+    public static getInstance(): ChainManager {
         if (!ChainManager.instance) {
-            if (!treasuryAddresses) {
-                throw new Error('ChainManager needs treasury addresses for first initialization');
-            }
-            ChainManager.instance = new ChainManager(treasuryAddresses);
+            ChainManager.instance = new ChainManager();
         }
         return ChainManager.instance;
     }
 
     async initialize() {
-        for (const [chainKey, chain] of Object.entries(CHAINS)) {
-            const treasuryAddress = this.treasuryAddresses[chainKey];
-            if (!treasuryAddress) {
-                console.warn(`No treasury address configured for chain ${chainKey}`);
-                continue;
-            }
-
-            const handler: ChainHandler = chain.type === 'evm' 
-                ? new EVMHandler(chain, chain.rpc.url, treasuryAddress)
-                : new SolanaHandler(chain, chain.rpc.url, treasuryAddress);
+        for (const chain of Object.values(CHAINS)) {
+            const handler: ChainHandler = chain.type === 'evm'
+                ? (chain.id === 42161 
+                    ? new ArbitrumHandler(chain, chain.rpc.url, chain.treasuryAddress)
+                    : chain.id === 8453
+                        ? new BaseHandler(chain, chain.rpc.url, chain.treasuryAddress)
+                        : new EVMHandler(chain, chain.rpc.url, chain.treasuryAddress))
+                : new SolanaHandler(chain, chain.rpc.url, chain.treasuryAddress);
 
             handler.on('depositDetected', (event: TransactionEvent) => {
                 this.emit('depositDetected', event);
@@ -43,7 +38,7 @@ export class ChainManager extends EventEmitter {
             await handler.startEventListener();
             this.handlers.set(chain.id.toString(), handler);
             
-            console.log(`Initialized ${chain.name} handler with treasury ${treasuryAddress}`);
+            console.log(`Initialized ${chain.name} handler with treasury ${chain.treasuryAddress}`);
         }
     }
 
@@ -66,13 +61,16 @@ export class ChainManager extends EventEmitter {
         if (!handler) {
             throw new Error(`No handler found for chain ${chainId}`);
         }
-        const treasuryAddress = this.treasuryAddresses[token.chain.id.toString()];
-        return handler.transfer(treasuryAddress, to, token, amount);
+        return handler.transfer(token.chain.treasuryAddress, to, token, amount);
     }
 
     async shutdown() {
         for (const handler of this.handlers.values()) {
             await handler.stopEventListener();
         }
+    }
+
+    public getHandler(chainId: string | number): ChainHandler | undefined {
+        return this.handlers.get(chainId.toString());
     }
 } 
