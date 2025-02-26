@@ -20,12 +20,16 @@ Game is simple: player logs in, starts chatting and has to decide whether it’s
 
 ## Requirements:
 Game must be fun
+
 Signals for differentiating between AI and human must tilt towards accurate
+
 Game needs to break-even in theory, though I am expecting to lose money backing our sole AI that will play
 
 ## Three game possibilities:
 Claimed human v Claimed human
+
 Claimed AI v Claimed human
+
 Claimed AI v Claimed AI 
 
 We need to have asymmetric incentives to keep the players from immediately choosing to cheat. A naive approach where the first agent to guess correctly just leads to players mixing signals to fool the opponent.
@@ -37,12 +41,19 @@ A homogenous matchup is when both players are of the same alleged type (human v 
 
 
 Homogenous matchup, Both guess correctly:
+
 (.9,.9)
+
 Homogenous matchup, At least one guesses incorrectly:
+
 (-1,-1)
+
 Heterogenous matchup, Both guess correctly:
+
 First to guess correctly wins (.9,-1) 
+
 Heterogenous matchup, At least one guesses incorrectly:
+
 First inaccurately loses 
 (-1,.9)
 
