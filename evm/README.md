@@ -34,7 +34,7 @@ Claimed AI v Claimed AI
 
 ## Rewards
 
-We need to have asymmetric incentives to keep the players from immediately choosing to cheat. A naive approach where the first agent to guess correctly just leads to players mixing signals to fool the opponent.
+We need to have asymmetric incentives to keep the players from immediately choosing to cheat. A naive approach where the first agent to guess correctly wins just leads to players mixing signals (AI and human) to fool the opponent.
 
 If we make it so that the optimal strategy depends on what the opponent is, and one of the optimal strategies isn’t to cheat, they shouldn’t immediately choose to cheat.
 
@@ -70,6 +70,6 @@ We could further tweak the homogenous matchups by giving the first correct guess
 
 Easy strategy we should probably mitigate: Guessing by population probability. Should make the chance of any matchup relatively equal.
 
-AI might guess identities with minimal delay once it identifies patterns. Humans, even if they’re correct, might take longer to respond. That timing disadvantage can skew outcomes in AI vs. human matchups. I don’t consider this an actual problem. I think we should create the culture and aesthetic around the game as AI v human since that’s what matters anyway.
+AI might guess identities with minimal delay once it identifies patterns. Humans, even if they’re correct, might take longer to respond. That timing disadvantage can skew outcomes in AI vs. human matchups. I don’t consider this an actual problem. I think we should create the culture and aesthetic around the game as Man versus Machine since that’s what matters anyway.
 
 
