@@ -58,7 +58,7 @@ First inaccurately loses
 (-1,.9)
 
 
-Collusion is disincentivized by network fees. There is nothing to gain by colluding, only lost fees. Colluding, however, could mitigate the idea of using this directly as an authentication token. 
+The homogenous matchup also disincentivizes collusion because of fees. Colluding, however, could mitigate the idea of using this directly as an authentication token. Since the game incentives are asymmetric, there should still be some signal to grant authentication. Colluders with multiple players simultaneously could know if they are playing against themselves. There is probably some math about fees lost versus increased probability of winning in the heterogeneous matchup to be solved here. I will leave that for future refinement. 
 
 We could further tweak the homogenous matchups by giving the first correct guesser a little more, but I think we should keep it simple.
 
