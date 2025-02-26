@@ -105,6 +105,22 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
     event EmergencyPaused(address indexed by);
     event EmergencyUnpaused(address indexed by);
 
+    // Add new struct for game results
+    struct GameResult {
+        bytes32 gameId;           // Unique identifier for the game
+        uint256 newBalance;       // Final balance after the game
+        bytes32 gameResultHash;   // Hash of game data for verification
+    }
+
+    // Add event for game updates
+    event GameResultUpdated(
+        address indexed user,
+        address indexed token,
+        bytes32 indexed gameId,
+        int256 amountChange,
+        bytes32 gameResultHash
+    );
+
     // ------------------------------------------------------------------------
     // Modifiers
     // ------------------------------------------------------------------------
@@ -162,83 +178,24 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
     // Deposit Functions (Require Signature)
     // ------------------------------------------------------------------------
 
-    struct ServerDepositAuth {
-        uint256 expectedAmount;    // Amount server expects to be deposited
-        uint256 nonce;            // Nonce for replay protection
+    function depositETH() external payable notBanned whenNotPaused {
+        require(msg.value > 0, "Amount must be positive");
+
+        ethDeposits[msg.sender] += msg.value;
+        emit ETHDeposit(msg.sender, msg.value);
+        emit BalanceUpdated(msg.sender, address(0), ethDeposits[msg.sender]);
     }
 
-    /**
-     * @notice Deposit ETH into the contract, requiring a server-signed authorization.
-     * @param auth The struct containing the authorization data.
-     * @param signature A signature from `serverSigner`.
-     */
-    function depositETH(
-        ServerDepositAuth calldata auth,
-        bytes calldata signature
-    ) external payable notBanned whenNotPaused {
-        require(auth.expectedAmount > 0, "Amount must be positive");
-        require(msg.value == auth.expectedAmount, "ETH amount mismatch");
-        _useNonce(msg.sender, auth.nonce);
-
-        bytes32 messageHash = keccak256(
-            abi.encode(
-                "depositETH",
-                block.chainid,
-                msg.sender,
-                auth.expectedAmount,
-                auth.nonce,
-                address(this)
-            )
-        );
-
-        address recovered = ECDSA.recover(
-            MessageHashUtils.toEthSignedMessageHash(messageHash),
-            signature
-        );
-        require(recovered == serverSigner, "DepositContract: invalid signature");
-
-        ethDeposits[msg.sender] += auth.expectedAmount;
-        emit ETHDeposit(msg.sender, auth.expectedAmount);
-    }
-
-    /**
-     * @notice Deposit ERC20 tokens into the contract, requiring server-signed authorization.
-     * @param auth The struct containing the authorization data.
-     * @param token The ERC20 token address.
-     * @param signature A signature from `serverSigner`.
-     *
-     * User must have first called `approve(thisContract, amount)` on the token contract.
-     */
     function depositToken(
-        ServerDepositAuth calldata auth,
         address token,
-        bytes calldata signature
+        uint256 amount
     ) external notBanned whenNotPaused {
         require(token != address(0), "Invalid token address");
-        require(auth.expectedAmount > 0, "Amount must be positive");
-        _useNonce(msg.sender, auth.nonce);
-
-        bytes32 messageHash = keccak256(
-            abi.encode(
-                "depositToken",
-                block.chainid,
-                msg.sender,
-                token,
-                auth.expectedAmount,
-                auth.nonce,
-                address(this)
-            )
-        );
-
-        address recovered = ECDSA.recover(
-            MessageHashUtils.toEthSignedMessageHash(messageHash),
-            signature
-        );
-        require(recovered == serverSigner, "Invalid signature");
+        require(amount > 0, "Amount must be positive");
 
         // Track actual token balance changes
         uint256 balanceBefore = IERC20(token).balanceOf(address(this));
-        bool success = IERC20(token).transferFrom(msg.sender, address(this), auth.expectedAmount);
+        bool success = IERC20(token).transferFrom(msg.sender, address(this), amount);
         require(success, "Token transfer failed");
         uint256 actualDeposit = IERC20(token).balanceOf(address(this)) - balanceBefore;
         
@@ -270,9 +227,9 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
         ServerAuthorization calldata auth,
         bytes calldata signature
     ) external notBanned nonReentrant whenNotPaused {
-        require(ethDeposits[msg.sender] == auth.currentBalance, "DepositContract: balance changed");
-        require(auth.currentBalance >= auth.amount, "DepositContract: insufficient balance");
-        require(auth.currentBalance - auth.amount == auth.newBalance, "DepositContract: invalid balance math");
+        require(ethDeposits[msg.sender] == auth.currentBalance, "Balance changed");
+        require(auth.currentBalance >= auth.amount, "Insufficient balance");
+        require(auth.currentBalance - auth.amount == auth.newBalance, "Invalid balance math");
         _useNonce(msg.sender, auth.nonce);
 
         bytes32 messageHash = keccak256(
@@ -289,18 +246,19 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
             MessageHashUtils.toEthSignedMessageHash(messageHash),
             signature
         );
-        require(recovered == serverSigner, "DepositContract: invalid signature");
+        require(recovered == serverSigner, "Invalid signature");
 
         // Emit events before external calls
         emit ETHWithdrawal(msg.sender, auth.amount);
         emit BalanceChange(msg.sender, "withdraw", auth.gameResultsHash);
+        emit BalanceUpdated(msg.sender, address(0), auth.newBalance);
 
         // Set balance directly to server-authorized new balance
         ethDeposits[msg.sender] = auth.newBalance;
 
         // External call last
         (bool sent, ) = payable(msg.sender).call{value: auth.amount}("");
-        require(sent, "DepositContract: ETH transfer failed");
+        require(sent, "ETH transfer failed");
     }
 
     /**
@@ -396,5 +354,68 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
         } else {
             require(IERC20(token).transfer(owner, amount), "Token transfer failed");
         }
+    }
+
+    /**
+     * @notice Update balance based on individual game results
+     * @param token The token address (use address(0) for ETH)
+     * @param game The game result data
+     * @param nonce Nonce for replay protection
+     * @param signature Server signature authorizing this update
+     */
+    function updateGameResult(
+        address token,
+        GameResult calldata game,
+        uint256 nonce,
+        bytes calldata signature
+    ) external notBanned nonReentrant whenNotPaused {
+        // Get current balance
+        uint256 currentBalance = token == address(0) ? 
+            ethDeposits[msg.sender] : 
+            tokenDeposits[msg.sender][token];
+
+        // Calculate amount change (can be positive or negative)
+        int256 amountChange = int256(game.newBalance) - int256(currentBalance);
+        
+        _useNonce(msg.sender, nonce);
+
+        // Verify server signature
+        bytes32 messageHash = keccak256(
+            abi.encode(
+                "updateGame",
+                block.chainid,
+                msg.sender,
+                token,
+                game.gameId,
+                game.newBalance,    // Sign the exact new balance
+                game.gameResultHash,
+                nonce,
+                address(this)
+            )
+        );
+
+        address recovered = ECDSA.recover(
+            MessageHashUtils.toEthSignedMessageHash(messageHash),
+            signature
+        );
+        require(recovered == serverSigner, "Invalid signature");
+
+        // Update balance
+        if (token == address(0)) {
+            ethDeposits[msg.sender] = game.newBalance;
+            emit BalanceUpdated(msg.sender, address(0), game.newBalance);
+        } else {
+            tokenDeposits[msg.sender][token] = game.newBalance;
+            emit BalanceUpdated(msg.sender, token, game.newBalance);
+        }
+
+        // Emit game result with calculated amount change
+        emit GameResultUpdated(
+            msg.sender,
+            token,
+            game.gameId,
+            amountChange,
+            game.gameResultHash
+        );
     }
 }

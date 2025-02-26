@@ -15,7 +15,11 @@ const config: HardhatUserConfig = {
     sources: "./contracts",
     tests: "./test",
     artifacts: "./artifacts"
-  }
+  },
+  typechain: {
+    outDir: "typechain",
+    target: "ethers-v6",
+  },
 };
 
 export default config;
