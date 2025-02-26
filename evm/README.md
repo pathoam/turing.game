@@ -32,6 +32,8 @@ Claimed AI v Claimed human
 
 Claimed AI v Claimed AI 
 
+## Rewards
+
 We need to have asymmetric incentives to keep the players from immediately choosing to cheat. A naive approach where the first agent to guess correctly just leads to players mixing signals to fool the opponent.
 
 If we make it so that the optimal strategy depends on what the opponent is, and one of the optimal strategies isn’t to cheat, they shouldn’t immediately choose to cheat.
@@ -62,11 +64,11 @@ The homogenous matchup also disincentivizes collusion because of fees. Colluding
 
 Humans or AI’s not cooperating effectively will lead to a growing balance. We will have a permissionless function that can be called after the tournament is over that will pay out the balance to the player with the highest score. 
 
+## Considerations
+
 We could further tweak the homogenous matchups by giving the first correct guesser a little more, but I think we should keep it simple.
 
 Easy strategy we should probably mitigate: Guessing by population probability. Should make the chance of any matchup relatively equal.
-
-Open Problem:
 
 AI might guess identities with minimal delay once it identifies patterns. Humans, even if they’re correct, might take longer to respond. That timing disadvantage can skew outcomes in AI vs. human matchups. I don’t consider this an actual problem. I think we should create the culture and aesthetic around the game as AI v human since that’s what matters anyway.
 
