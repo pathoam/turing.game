@@ -1,4 +1,6 @@
 import { ChainManager } from '../chainHandler/chainManager';
+import dotenv from 'dotenv';
+dotenv.config();
 
 export interface Token {
     symbol: string;
@@ -8,56 +10,56 @@ export interface Token {
 }
 
 export interface Chain {
-    id: string | number;
+    id: number | string;
     name: string;
-    nativeToken: string;
-    rpc: {
-        url: string;     // HTTP URL
-        wsUrl: string;   // WebSocket URL
-        apiKey: string;  // API key
-    };
     type: 'evm' | 'solana';
-    treasuryAddress: string;  // Add treasury address per chain
+    nativeToken: string;
+    treasuryAddress: string | undefined;
+    rpc: {
+        url: string;        // Required
+        wsUrl: string;      // Required for EVMHandler
+        apiKey: string;     // Required for Alchemy/Helius
+    };
 }
 
 // Example chain configurations
 export const CHAINS: Record<string, Chain> = {
-    arbitrum: {
+    ARBITRUM: {
         id: 42161,
         name: 'Arbitrum',
+        type: 'evm' as const,
         nativeToken: 'ETH',
+        treasuryAddress: process.env.ARBITRUM_TREASURY_ADDRESS,
         rpc: {
-            url: `https://arb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_ARBITRUM_KEY}`,
-            wsUrl: `wss://arb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_ARBITRUM_KEY}`,
-            apiKey: process.env.ALCHEMY_ARBITRUM_KEY!
-        },
-        type: 'evm',
-        treasuryAddress: process.env.ARBITRUM_TREASURY_ADDRESS!
+            url: process.env.DRPC_ARBITRUM_URL || process.env.ALCHEMY_ARBITRUM_URL || '',
+            wsUrl: process.env.ALCHEMY_ARBITRUM_WS_URL || '',
+            apiKey: process.env.ALCHEMY_API_KEY || ''
+        }
     },
-    base: {
+    BASE: {
         id: 8453,
         name: 'Base',
+        type: 'evm' as const,
         nativeToken: 'ETH',
+        treasuryAddress: process.env.BASE_TREASURY_ADDRESS,
         rpc: {
-            url: `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_BASE_KEY}`,
-            wsUrl: `wss://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_BASE_KEY}`,
-            apiKey: process.env.ALCHEMY_BASE_KEY!
-        },
-        type: 'evm',
-        treasuryAddress: process.env.BASE_TREASURY_ADDRESS!
+            url: process.env.DRPC_BASE_RPC_URL || process.env.ALCHEMY_BASE_URL || '',
+            wsUrl: process.env.ALCHEMY_BASE_WS_URL || '',
+            apiKey: process.env.ALCHEMY_API_KEY || ''
+        }
     },
-    solana: {
-        id: '4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZ',
-        name: 'Solana',
-        nativeToken: 'SOL',
-        rpc: {
-            url: `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`,
-            wsUrl: `wss://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`,
-            apiKey: process.env.HELIUS_API_KEY!
-        },
-        type: 'solana',
-        treasuryAddress: process.env.SOLANA_TREASURY_ADDRESS!
-    }
+    // solana: {
+    //     id: '4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZ',
+    //     name: 'Solana',
+    //     nativeToken: 'SOL',
+    //     rpc: {
+    //         url: `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`,
+    //         wsUrl: `wss://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`,
+    //         apiKey: process.env.HELIUS_API_KEY!
+    //     },
+    //     type: 'solana' as const,
+    //     treasuryAddress: process.env.SOLANA_TREASURY_ADDRESS!
+    // }
 };
 
 // Define our supported tokens with chain info
@@ -66,25 +68,25 @@ export const TOKENS = {
         symbol: 'ARB',
         address: '0x912CE59144191C1204E64559FE8253a0e49E6548',
         decimals: 18,
-        chain: CHAINS.arbitrum
+        chain: CHAINS.ARBITRUM
     },
     BASE: {
         symbol: 'BASE', 
         address: '0x4200000000000000000000000000000000000006',
         decimals: 18,
-        chain: CHAINS.base
+        chain: CHAINS.BASE
     },
     ARB_USDC: {
         symbol: 'USDC',
         address: '0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8',
         decimals: 6,
-        chain: CHAINS.arbitrum
+        chain: CHAINS.ARBITRUM
     },
     BASE_USDC: {
         symbol: 'USDC',
         address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
         decimals: 6,
-        chain: CHAINS.base
+        chain: CHAINS.BASE
     },
     SOL: {
         symbol: 'SOL',

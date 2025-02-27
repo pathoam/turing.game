@@ -3,7 +3,16 @@ import { ChainHandler, TransactionResult, BalanceResponse, TransactionEvent, Tok
 import { Chain, Token, TOKENS } from '../utils/balances';
 import { WebSocketProvider } from '@ethersproject/providers';
 import { Contract } from '@ethersproject/contracts';
-import { Alchemy, Network } from 'alchemy-sdk';
+import { Alchemy, Network, AlchemySubscription } from 'alchemy-sdk';
+import dotenv from 'dotenv';
+import { activeParticipants } from '../utils/activeParticipants';
+import { Participant } from '../models/participant';
+import { TokenAmount } from '../utils/tokenAmount';
+
+// Import contract ABI and address
+import { abi as DepositContractABI } from '../../../evm/artifacts/contracts/turing-game.sol/DepositContract.json';
+
+dotenv.config();
 
 // Standard ERC20 ABI for balance and transfer methods
 const ERC20_ABI = [
@@ -25,24 +34,53 @@ interface AlchemyPriceResponse {
 }
 
 export class EVMHandler extends ChainHandler {
-    private wsProvider: WebSocketProvider;
-    private provider: ethers.JsonRpcProvider;  // For transactions
+    private wsProvider!: WebSocketProvider;  // Must be initialized
+    private provider: ethers.JsonRpcProvider;
     private contracts: Map<string, Contract> = new Map();
     private alchemy: Alchemy;
     private priceCache: Map<string, TokenPrice> = new Map();
     private lastPriceUpdate: number = 0;
     private readonly PRICE_UPDATE_INTERVAL = 5 * 60 * 1000; // 5 minutes
+    private wallet: ethers.Wallet;
+    private depositContract: ethers.Contract;
+    private contractAddress: string;
 
     constructor(chain: Chain, rpcUrl: string, treasuryAddress: string) {
         super(chain, rpcUrl, treasuryAddress);
-        this.wsProvider = new WebSocketProvider(chain.rpc.wsUrl);
+        
+        const isLocalhost = rpcUrl.includes('localhost') || rpcUrl.includes('127.0.0.1');
         this.provider = new ethers.JsonRpcProvider(chain.rpc.url);
+
+        if (isLocalhost) {
+            // For local development, use HTTP provider for events
+            this.wsProvider = this.provider as unknown as WebSocketProvider;
+        } else if (chain.rpc.wsUrl) {
+            this.wsProvider = new WebSocketProvider(chain.rpc.wsUrl);
+        } else {
+            throw new Error(`WebSocket URL required for chain ${chain.name}`);
+        }
         
         // Initialize Alchemy SDK
         this.alchemy = new Alchemy({
             apiKey: chain.rpc.apiKey,
             network: this.getAlchemyNetwork(chain.id)
         });
+        
+        // Initialize wallet with private key
+        this.wallet = new ethers.Wallet(process.env.PRIVATE_KEY!, this.provider);
+        
+        // Set contract address
+        this.contractAddress = process.env.DEPOSIT_CONTRACT_ADDRESS || '';
+        
+        // Initialize contract instance
+        this.depositContract = new ethers.Contract(
+            this.contractAddress,
+            DepositContractABI,
+            this.wallet
+        );
+        
+        // Set up event listeners
+        this.setupEventListeners();
     }
 
     protected getAlchemyNetwork(chainId: string | number): Network {
@@ -72,7 +110,6 @@ export class EVMHandler extends ChainHandler {
     }
 
     async startEventListener(): Promise<void> {
-        // Listen for new blocks
         this.wsProvider.on('block', (blockNumber) => {
             console.log(`New block on ${this.chain.name}: ${blockNumber}`);
         });
@@ -283,5 +320,320 @@ export class EVMHandler extends ChainHandler {
             usdPrice: 0,
             lastUpdated: 0
         });
+    }
+
+    private setupEventListeners() {
+        this.depositContract.on('ETHDeposit', (user, amount, event) => {
+            console.log(`ETH Deposit on ${this.chain.id}: ${user} deposited ${amount}`);
+            this.emit('deposit', {
+                chainId: this.chain.id.toString(),
+                user,
+                token: 'ETH',
+                amount,
+                event
+            });
+        });
+
+        this.depositContract.on('TokenDeposit', (user, token, amount, event) => {
+            console.log(`Token Deposit on ${this.chain.id}: ${user} deposited ${amount} of ${token}`);
+            this.emit('deposit', {
+                chainId: this.chain.id.toString(),
+                user,
+                token,
+                amount,
+                event
+            });
+        });
+
+        this.depositContract.on('ETHWithdrawal', (user, amount, event) => {
+            this.emit('withdrawal', {
+                chainId: this.chain.id.toString(),
+                user,
+                token: 'ETH',
+                amount,
+                event
+            });
+        });
+
+        this.depositContract.on('TokenWithdrawal', (user, token, amount, event) => {
+            this.emit('withdrawal', {
+                chainId: this.chain.id.toString(),
+                user,
+                token,
+                amount,
+                event
+            });
+        });
+
+        this.depositContract.on('GameResultUpdated', (user, token, gameId, amountChange, gameResultHash, event) => {
+            this.emit('gameResult', {
+                chainId: this.chain.id.toString(),
+                user,
+                token,
+                gameId,
+                amountChange,
+                gameResultHash,
+                event
+            });
+        });
+    }
+
+    // Event handlers
+    private async handleDeposit(user: string, token: string, amount: bigint, event: any) {
+        try {
+            console.log(`[ContractEvent] deposit: user=${user}, token=${token}, amount=${amount.toString()}`);
+            
+            const chainId = this.chain.id;
+            let tokenAddress = token === 'ETH' ? ethers.ZeroAddress : token;
+            let decimals = 18;  // default for ETH
+
+            // Get token decimals if it's an ERC20
+            if (token !== 'ETH') {
+                const knownToken = Object.values(TOKENS).find(t => 
+                    t.address.toLowerCase() === token.toLowerCase() && 
+                    t.chain.id === chainId
+                );
+                decimals = knownToken?.decimals || 18;
+            }
+
+            // Create TokenAmount for the deposit
+            const depositAmount = new TokenAmount(amount, decimals);
+
+            // Update in-memory participant if exists
+            let participant = activeParticipants.get(user);
+            
+            // If not in memory, fetch from DB
+            if (!participant) {
+                const dbParticipant = await Participant.findOne({ address: user, role: 'user' });
+                if (dbParticipant) {
+                    participant = dbParticipant;
+                    activeParticipants.set(user, dbParticipant);
+                }
+            }
+
+            if (!participant) {
+                console.warn(`No participant record found for address=${user}`);
+                return;
+            }
+
+            // Update balance
+            await participant.updateBalance(tokenAddress, depositAmount, chainId);
+            
+            // Emit WebSocket event for UI update
+            this.emit('balanceUpdate', {
+                user,
+                token: tokenAddress,
+                newBalance: participant.getBalance(tokenAddress)
+            });
+
+        } catch (error) {
+            console.error('handleDeposit error:', error);
+        }
+    }
+    
+    private async handleWithdrawal(user: string, token: string, amount: bigint, event: any) {
+        try {
+            console.log(`[ContractEvent] withdrawal: user=${user}, token=${token}, amount=${amount.toString()}`);
+            
+            const chainId = this.chain.id;
+            let tokenAddress = token === 'ETH' ? ethers.ZeroAddress : token;
+            let decimals = token === 'ETH' ? 18 : (
+                Object.values(TOKENS).find(t => 
+                    t.address.toLowerCase() === token.toLowerCase() && 
+                    t.chain.id === chainId
+                )?.decimals || 18
+            );
+
+            // Create negative TokenAmount for withdrawal
+            const withdrawAmount = new TokenAmount(amount, decimals);
+            const negativeAmount = new TokenAmount(`-${withdrawAmount.toString()}`, decimals);
+
+            // Get participant from memory or DB
+            let participant = activeParticipants.get(user) || 
+                await Participant.findOne({ address: user, role: 'user' });
+
+            if (!participant) {
+                console.warn(`No participant record found for address=${user}`);
+                return;
+            }
+
+            // Update balance
+            await participant.updateBalance(tokenAddress, negativeAmount, chainId);
+            
+            // Keep in-memory map updated
+            activeParticipants.set(user, participant);
+
+            // Emit WebSocket event
+            this.emit('balanceUpdate', {
+                user,
+                token: tokenAddress,
+                newBalance: participant.getBalance(tokenAddress)
+            });
+
+        } catch (error) {
+            console.error('handleWithdrawal error:', error);
+        }
+    }
+    
+    private async handleGameResult(
+        user: string,
+        token: string,
+        gameId: string,
+        amountChange: bigint,
+        gameResultHash: string,
+        event: any
+    ) {
+        try {
+            console.log(`[ContractEvent] gameResult: user=${user}, gameId=${gameId}, amountChange=${amountChange.toString()}`);
+            
+            const chainId = this.chain.id;
+            let tokenAddress = token === 'ETH' ? ethers.ZeroAddress : token;
+            let decimals = token === 'ETH' ? 18 : (
+                Object.values(TOKENS).find(t => 
+                    t.address.toLowerCase() === token.toLowerCase() && 
+                    t.chain.id === chainId
+                )?.decimals || 18
+            );
+
+            // Create TokenAmount from amountChange (can be positive or negative)
+            const changeAmount = new TokenAmount(amountChange.toString(), decimals);
+
+            // Get participant
+            let participant = activeParticipants.get(user) || 
+                await Participant.findOne({ address: user, role: 'user' });
+
+            if (!participant) {
+                console.warn(`No participant record found for address=${user}`);
+                return;
+            }
+
+            // Update balance
+            await participant.updateBalance(tokenAddress, changeAmount, chainId);
+            
+            // Update in-memory map
+            activeParticipants.set(user, participant);
+
+            // Emit WebSocket event
+            this.emit('balanceUpdate', {
+                user,
+                token: tokenAddress,
+                newBalance: participant.getBalance(tokenAddress)
+            });
+
+        } catch (error) {
+            console.error('handleGameResult error:', error);
+        }
+    }
+    
+    private async handleBalanceUpdate(user: string, token: string, newBalance: bigint, event: any) {
+        // Update user balance in database
+        // Notify user via WebSocket
+    }
+    
+    // Function to sign withdrawal authorization
+    public async signWithdrawalAuthorization(
+        user: string,
+        token: string,
+        amount: bigint,
+        currentBalance: bigint,
+        newBalance: bigint,
+        gameResultsHash: string,
+        nonce: bigint
+    ): Promise<string> {
+        // Create the authorization struct exactly as in the contract
+        const auth = [amount, currentBalance, newBalance, gameResultsHash, nonce];
+        const chainId = await this.provider.getNetwork().then(n => n.chainId);
+        
+        let encoded;
+        if (token === 'ETH') {
+            // For ETH withdrawals
+            encoded = ethers.AbiCoder.defaultAbiCoder().encode(
+                [
+                    'string',
+                    'uint256',
+                    'address',
+                    'tuple(uint256,uint256,uint256,bytes32,uint256)',
+                    'address'
+                ],
+                [
+                    'withdrawETH',
+                    chainId,
+                    user,
+                    auth,
+                    this.contractAddress
+                ]
+            );
+        } else {
+            // For token withdrawals
+            encoded = ethers.AbiCoder.defaultAbiCoder().encode(
+                [
+                    'string',
+                    'uint256',
+                    'address',
+                    'address',
+                    'tuple(uint256,uint256,uint256,bytes32,uint256)',
+                    'address'
+                ],
+                [
+                    'withdrawToken',
+                    chainId,
+                    user,
+                    token, // The token address
+                    auth,
+                    this.contractAddress
+                ]
+            );
+        }
+        
+        const messageHash = ethers.keccak256(encoded);
+        
+        // This is the correct way to match MessageHashUtils.toEthSignedMessageHash()
+        return await this.wallet.signMessage(ethers.getBytes(messageHash));
+    }
+    
+    // Function to sign game result update
+    public async signGameResult(
+        user: string,
+        token: string,
+        gameId: string,
+        newBalance: bigint,
+        gameResultHash: string,
+        nonce: bigint
+    ): Promise<string> {
+        const chainId = await this.provider.getNetwork().then(n => n.chainId);
+        
+        // Match contract's abi.encode format exactly
+        const messageHash = ethers.keccak256(
+            ethers.AbiCoder.defaultAbiCoder().encode(
+                [
+                    'string',
+                    'uint256',
+                    'address',
+                    'address',
+                    'tuple(bytes32,uint256,bytes32)',
+                    'uint256',
+                    'address'
+                ],
+                [
+                    'updateGame',
+                    chainId,
+                    user,
+                    token === 'ETH' ? ethers.ZeroAddress : token,
+                    [gameId, newBalance, gameResultHash],
+                    nonce,
+                    this.contractAddress
+                ]
+            )
+        );
+
+        // Just sign the hash once - wallet.signMessage handles the Ethereum prefix
+        return await this.wallet.signMessage(ethers.getBytes(messageHash));
+    }
+
+    public async getContractTokenBalance(tokenAddress: string): Promise<bigint> {
+        if (tokenAddress === ethers.ZeroAddress) {
+            return await this.provider.getBalance(this.contractAddress);
+        }
+        return await this.depositContract.getContractTokenBalance(tokenAddress);
     }
 }

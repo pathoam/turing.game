@@ -14,6 +14,8 @@ import { Assistant } from './models/assistant';
 import { createAssistant, getAssistantById, deleteAssistant } from './handlers/assistant';
 import { initializeDatabase } from './utils/database';
 import { handleReport } from './handlers/report';
+import { ChainManager } from './chainHandler/chainManager';
+import { activeParticipants } from './utils/activeParticipants';
 
 
 dotenv.config();
@@ -25,7 +27,7 @@ const FEE = .1;
 // const MODEL = "TheBloke/OpenHermes-2.5-Mistral-7B-16k-GGUF/openhermes-2.5-mistral-7b-16k.Q8_0.gguf";
 
 async function main() {
-  // Connect to MongoDB
+  // Connect to MongoDB first
   await mongoose.connect(MONGODB_URI);
   console.log('Connected to MongoDB');
   await initializeDatabase();
@@ -38,10 +40,20 @@ async function main() {
       methods: ['GET', 'POST']
     }
   });
-  console.log('setup websocket server');
 
+  // Setup MongoDB adapter for Socket.IO
+  const mongoCollection = mongoose.connection.collection('socket.io-adapter-events') as any;
+  io.adapter(createAdapter(mongoCollection));
+
+  // Initialize ChainManager with Socket.IO
+  const chainManager = ChainManager.getInstance();
+  chainManager.setSocketServer(io);
+  await chainManager.initialize();
+  console.log('Chain handlers initialized');
+
+  // Initialize matching engine after chain manager
   const matchingEngine = new MatchingEngine(io);
-  console.log('started matching engine');
+  console.log('Started matching engine');
 
   // Map to store participant ID to socket ID mappings
   const activeSockets = new Map<string, string>();
@@ -50,10 +62,6 @@ async function main() {
     if (!socketId) return null;
     return io.sockets.sockets.get(socketId);
   }
-
-  // Setup MongoDB adapter for Socket.IO
-  const mongoCollection = mongoose.connection.collection('socket.io-adapter-events') as any;
-  io.adapter(createAdapter(mongoCollection));
 
   io.on('connection', (socket) => {
     console.log('Client connected:', socket.id);
@@ -68,12 +76,15 @@ async function main() {
       try {
         const participant = await initParticipant(address, role);
         
-        // Store the mapping
-        activeSockets.set(participant.id, socket.id);
+        // Store in active participants
+        activeParticipants.set(address, participant);
+        
+        // Subscribe to chain events for this address
+        socket.join(address); // Join room for chain event updates
         
         socket.on('disconnect', () => {
-          // Clean up the mapping when socket disconnects
-          activeSockets.delete(participant.id);
+          // Don't remove from activeParticipants here - they might reconnect
+          socket.leave(address);
         });
 
         socket.emit('participant_initialized', participant);
@@ -395,8 +406,17 @@ async function main() {
     });
     });
     
-    io.listen(PORT);
-    console.log(`WebSocket server is listening on port ${PORT}`);
+    // Graceful shutdown
+    process.on('SIGTERM', async () => {
+        console.log('SIGTERM received. Shutting down...');
+        await chainManager.shutdown();
+        await mongoose.disconnect();
+        process.exit(0);
+    });
+
+    httpServer.listen(PORT, () => {
+        console.log(`WebSocket server is listening on port ${PORT}`);
+    });
   }
 
 async function getAIResponse(sessionId: string, assistantId: string) {
@@ -487,6 +507,6 @@ async function formatChat(sessionId: string) {
 }
 
 main().catch(err => {
-    console.log('Fatal server error:', err);
+    console.error('Fatal server error:', err);
     process.exit(1);
   });
