@@ -69,13 +69,11 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
     // Banlist mapping (user => bool)
     mapping(address => bool) public banned;
 
-    // Server signer authorized to sign deposit/withdraw approvals
+    // Server signer authorized to sign withdraw approvals
     address public serverSigner;
 
     // Nonce usage for replay protection: user => (nonce => used?)
     mapping(address => mapping(uint256 => bool)) public usedNonces;
-
-    // Add sequential nonce tracking
     mapping(address => uint256) public lastNonce;
 
     // ------------------------------------------------------------------------

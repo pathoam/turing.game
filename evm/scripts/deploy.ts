@@ -3,7 +3,7 @@ import { ethers } from "hardhat";
 async function main() {
   // Get the deployer's account
   const [deployer] = await ethers.getSigners();
-  console.log("Deploying contracts with the account:", deployer.address);
+  console.log("Deploying contracts with account:", deployer.address);
 
   // Get deployer balance
   const balance = await ethers.provider.getBalance(deployer.address);
@@ -15,17 +15,17 @@ async function main() {
   if (!block) throw new Error("Failed to get block");
   
   // Deploy the DepositContract
-  const DepositContract = await ethers.getContractFactory("DepositContract");
-  const depositContract = await DepositContract.deploy();
-  await depositContract.waitForDeployment();
+  const TuringGame = await ethers.getContractFactory("DepositContract");
+  const game = await TuringGame.deploy();
+  await game.waitForDeployment();
 
-  const address = await depositContract.getAddress();
-  console.log("DepositContract deployed to:", address);
+  const address = await game.getAddress();
+  console.log("Contract deployed to:", address);
 }
 
 main()
   .then(() => process.exit(0))
   .catch((error) => {
-    console.error("Deployment failed:", error);
+    console.error(error);
     process.exit(1);
   });
