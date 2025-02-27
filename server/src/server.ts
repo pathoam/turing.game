@@ -24,7 +24,6 @@ const MONGODB_URI = process.env.MONGODB_URI!;
 const PORT = parseInt(process.env.PORT || '3001');
 
 const FEE = .1;
-// const MODEL = "TheBloke/OpenHermes-2.5-Mistral-7B-16k-GGUF/openhermes-2.5-mistral-7b-16k.Q8_0.gguf";
 
 async function main() {
   // Connect to MongoDB first
@@ -453,22 +452,6 @@ async function getAIResponse(sessionId: string, assistantId: string) {
           }
         });
         return response.data.choices[0].message.content;
-
-      // case 'anthropic':
-      //   const anthropic = new Anthropic({
-      //     apiKey: assistant.apiKey
-      //   });
-      //   const messages = chatHistory.map(msg => ({
-      //     role: msg.role === 'assistant' ? 'assistant' : 'user',
-      //     content: msg.content
-      //   }));
-      //   response = await anthropic.messages.create({
-      //     model: assistant.modelName,
-      //     messages: messages,
-      //     system: assistant.systemMsg,
-      //     ...assistant.params
-      //   });
-      //   return response.content[0].text;
 
       case 'custom':
         // For custom endpoints (like local LM Studio)
