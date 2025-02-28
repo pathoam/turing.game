@@ -166,6 +166,10 @@ contract TuringTournament is Ownable, ReentrancyGuard, Pausable {
     // ------------------------------------------------------------------------
     // Modifiers
     // ------------------------------------------------------------------------
+
+    /**
+     * @notice Modifier to ensure that the caller is not banned.
+     */
     modifier notBanned() {
         require(!banned[msg.sender], "caller is banned");
         _;
@@ -174,6 +178,7 @@ contract TuringTournament is Ownable, ReentrancyGuard, Pausable {
     // ------------------------------------------------------------------------
     // Constructor
     // ------------------------------------------------------------------------
+
     constructor() {
         // By default, let the contract owner also be the initial server signer
         serverSigner = msg.sender;
@@ -192,7 +197,6 @@ contract TuringTournament is Ownable, ReentrancyGuard, Pausable {
         emit AddressBanned(user);
     }
 
-
     /**
      * @notice Unban an address.
      * @param user The address to unban.
@@ -201,7 +205,6 @@ contract TuringTournament is Ownable, ReentrancyGuard, Pausable {
         banned[user] = false;
         emit AddressUnbanned(user);
     }
-
 
     /**
      * @notice Update the server signer address that authorizes deposits/withdrawals.
@@ -373,9 +376,7 @@ contract TuringTournament is Ownable, ReentrancyGuard, Pausable {
         return address(this).balance;
     }
 
-    /**
-     * @notice Get the contract's token balance for a given token.
-     */
+    // Add token balance check
     function getContractTokenBalance(address token) external view returns (uint256) {
         return IERC20(token).balanceOf(address(this));
     }
