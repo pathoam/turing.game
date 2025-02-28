@@ -3,8 +3,8 @@ pragma solidity ^0.8.28;
 
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/security/Pausable.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 
 /**
  * @notice Minimal interface for ERC20 tokens.
@@ -47,13 +47,13 @@ contract Ownable {
 
 /**
  * @title DepositContract with Tournament Reward Distribution
- * @notice This contract has been modified to:
- * 1. Add tournament finalization and reward distribution.
- * 2. Incorporate additional game outcome data (scoreChange) into the signed message.
- * 3. Use an improved nonce management scheme (without sequential requirements).
- * 4. Expand event logging for tournament phases and game results.
- *
- * Note: No additional fees are deducted from game results.
+ * @notice This contract now:
+ *  - Accepts ETH and token deposits/withdrawals.
+ *  - Tracks tournament performance using wins and games played.
+ *  - At tournament finalization, the entire contract balance (ETH and all recorded ERC20 tokens)
+ *    is transferred to the winner, determined by the highest ranking computed as:
+ *         (wins^2 * 1e18) / gamesPlayed.
+ *  - The ranking is equivalent to number of wins multiplied by winrate. A quadratic.
  */
 contract DepositContract is Ownable, ReentrancyGuard, Pausable {
     using ECDSA for bytes32;
@@ -74,8 +74,10 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
     // ------------------------------------------------------------------------
     // Tournament-Related Storage
     // ------------------------------------------------------------------------
-    // Mapping for tracking cumulative game scores for each player.
-    mapping(address => int256) public gameScores;
+    // Tournament performance tracking.
+    mapping(address => uint256) public wins;
+    mapping(address => uint256) public gamesPlayed;
+
     // List of tournament participants.
     address[] public participants;
     // Helper mapping to avoid duplicate entries.
@@ -86,8 +88,9 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
     uint256 public tournamentStartTime;
     uint256 public tournamentEndTime;
 
-    // Tournament prize pool. This pool must be funded externally.
-    uint256 public tournamentPrizePool;
+    // Array to record ERC20 tokens deposited (forming part of the prize pool).
+    address[] public tournamentTokens;
+    mapping(address => bool) public tokenRecorded;
 
     // ------------------------------------------------------------------------
     // Events
@@ -107,7 +110,7 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
     event NonceUsed(address indexed user, uint256 nonce);
     event BalanceUpdated(address indexed user, address indexed token, uint256 newBalance);
 
-    // Updated game result event logs the score change.
+    // Game result event logs the score change.
     event GameResultUpdated(
         address indexed user,
         address indexed token,
@@ -118,18 +121,18 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
 
     // Tournament-specific events.
     event TournamentStarted(uint256 startTime);
-    event TournamentEnded(uint256 endTime, address winner, uint256 prize);
-    event RewardDistributed(address winner, uint256 prize);
+    event TournamentEnded(uint256 endTime, address winner);
+    event RewardDistributed(address winner);
 
     // ------------------------------------------------------------------------
     // Structs
     // ------------------------------------------------------------------------
-    // GameResult now includes only the score change.
+    // GameResult includes the game ID, final balance, a hash for verification, and the score change.
     struct GameResult {
         bytes32 gameId;           // Unique identifier for the game.
         uint256 newBalance;       // Final balance after the game.
         bytes32 gameResultHash;   // Hash of game data for verification.
-        int256 scoreChange;       // Change in score for tournament tracking.
+        int256 scoreChange;       // Change in score (positive for win, negative for loss).
     }
 
     // Struct for server-signed authorization for withdrawals.
@@ -176,21 +179,11 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
         serverSigner = newSigner;
     }
 
-    /**
-     * @notice Fund the tournament prize pool.
-     * @dev Only the owner can fund this pool. This is a manual deposit.
-     */
-    function fundTournamentPrizePool() external payable onlyOwner {
-        require(msg.value > 0, "Must send ETH");
-        tournamentPrizePool += msg.value;
-    }
-
     // ------------------------------------------------------------------------
     // Deposit Functions (Require Signature)
     // ------------------------------------------------------------------------
     function depositETH() external payable notBanned whenNotPaused {
         require(msg.value > 0, "Amount must be positive");
-
         ethDeposits[msg.sender] += msg.value;
         emit ETHDeposit(msg.sender, msg.value);
         emit BalanceUpdated(msg.sender, address(0), ethDeposits[msg.sender]);
@@ -211,6 +204,12 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
         tokenDeposits[msg.sender][token] += actualDeposit;
         emit TokenDeposit(msg.sender, token, actualDeposit);
         emit BalanceUpdated(msg.sender, token, tokenDeposits[msg.sender][token]);
+
+        // Record token for tournament prize pool if not already recorded.
+        if (!tokenRecorded[token]) {
+            tokenRecorded[token] = true;
+            tournamentTokens.push(token);
+        }
     }
 
     // ------------------------------------------------------------------------
@@ -290,9 +289,10 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
     // Tournament and Game Result Functions
     // ------------------------------------------------------------------------
     /**
-     * @notice Update balance and tournament score based on a game result.
+     * @notice Update balance and tournament performance based on a game result.
      * @dev The off-chain server must sign the message containing gameId, newBalance, gameResultHash,
-     *      scoreChange, nonce, etc. Note that no fee is deducted.
+     *      scoreChange, nonce, etc.
+     *      A positive scoreChange indicates a win.
      */
     function updateGameResult(
         address token,
@@ -340,10 +340,12 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
             emit BalanceUpdated(msg.sender, token, game.newBalance);
         }
 
-        // If a tournament is active and this is an ETH game, update tournament scores.
-        if (tournamentActive && token == address(0)) {
-            gameScores[msg.sender] += game.scoreChange;
-            // Register the participant if not already registered.
+        // If a tournament is active, update performance metrics.
+        if (tournamentActive) {
+            gamesPlayed[msg.sender] += 1;
+            if (game.scoreChange > 0) {
+                wins[msg.sender] += 1;
+            }
             if (!isParticipant[msg.sender]) {
                 isParticipant[msg.sender] = true;
                 participants.push(msg.sender);
@@ -361,7 +363,7 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
 
     /**
      * @notice Starts a new tournament.
-     * @dev Only the owner can start a tournament. This resets prior tournament state.
+     * @dev Only the owner can start a tournament. This resets prior tournament performance.
      */
     function startTournament(uint256 duration) external onlyOwner {
         require(!tournamentActive, "Tournament already active");
@@ -372,7 +374,8 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
         // Reset tournament state.
         for (uint256 i = 0; i < participants.length; i++) {
             address participant = participants[i];
-            gameScores[participant] = 0;
+            wins[participant] = 0;
+            gamesPlayed[participant] = 0;
             isParticipant[participant] = false;
         }
         delete participants;
@@ -381,36 +384,55 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
     }
 
     /**
-     * @notice Finalizes the tournament and distributes the prize pool to the highest-scoring player.
-     * @dev Anyone can call this function once the tournament end time has passed.
+     * @notice Finalizes the tournament and distributes the total contract balance (ETH and all ERC20 tokens)
+     *         to the winner. The winner is determined by the highest ranking, calculated as:
+     *         (wins^2 * 1e18) / gamesPlayed. This is equivalent to number of wins multiplied by winrate.
+     *         The tournament is over when the end time is reached. This can be called permissionlessly.
      */
     function finalizeTournament() external nonReentrant {
         require(tournamentActive, "Tournament not active");
         require(block.timestamp >= tournamentEndTime, "Tournament not ended yet");
         require(participants.length > 0, "No participants in tournament");
 
-        // Determine the player with the highest tournament score.
         address winner = participants[0];
-        int256 highestScore = gameScores[winner];
+        uint256 bestRanking = getRanking(winner);
         for (uint256 i = 1; i < participants.length; i++) {
-            if (gameScores[participants[i]] > highestScore) {
-                highestScore = gameScores[participants[i]];
+            uint256 ranking = getRanking(participants[i]);
+            if (ranking > bestRanking) {
+                bestRanking = ranking;
                 winner = participants[i];
             }
         }
 
-        uint256 prize = tournamentPrizePool;
-        tournamentPrizePool = 0;
         tournamentActive = false;
 
-        // Transfer the tournament prize (if any) to the winner.
-        if (prize > 0) {
-            (bool sent, ) = payable(winner).call{value: prize}("");
-            require(sent, "Prize transfer failed");
+        // Transfer all ETH in the contract to the winner.
+        uint256 ethBalance = address(this).balance;
+        if (ethBalance > 0) {
+            (bool sent, ) = payable(winner).call{value: ethBalance}("");
+            require(sent, "ETH transfer failed");
         }
 
-        emit TournamentEnded(block.timestamp, winner, prize);
-        emit RewardDistributed(winner, prize);
+        // Transfer all ERC20 tokens recorded to the winner.
+        for (uint256 i = 0; i < tournamentTokens.length; i++) {
+            address token = tournamentTokens[i];
+            uint256 tokenBal = IERC20(token).balanceOf(address(this));
+            if (tokenBal > 0) {
+                bool success = IERC20(token).transfer(winner, tokenBal);
+                require(success, "Token transfer failed");
+            }
+        }
+
+        emit TournamentEnded(block.timestamp, winner);
+        emit RewardDistributed(winner);
+    }
+
+    // Internal helper to compute ranking for a participant.
+    // Ranking = (wins^2 * 1e18) / gamesPlayed. 
+    // This is equivalent to number of wins multiplied by winrate.
+    function getRanking(address participant) internal view returns (uint256) {
+        if (gamesPlayed[participant] == 0) return 0;
+        return (wins[participant] * wins[participant] * 1e18) / gamesPlayed[participant];
     }
 
     // ------------------------------------------------------------------------
@@ -430,12 +452,10 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
     // ------------------------------------------------------------------------
     function pause() external onlyOwner {
         _pause();
-        emit EmergencyPaused(msg.sender);
     }
 
     function unpause() external onlyOwner {
         _unpause();
-        emit EmergencyUnpaused(msg.sender);
     }
 
     // Prevent direct ETH transfers.

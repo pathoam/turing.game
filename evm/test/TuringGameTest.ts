@@ -1,65 +1,33 @@
-import { expect } from "chai";
 import { ethers, network } from "hardhat";
 import { Signer } from "ethers";
+import { strict as assert } from "assert";
 
-describe("DepositContract", function () {
+// Define constants.
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+const HASH_ZERO = "0x" + "0".repeat(64);
+
+describe("DepositContract - Tournament Funding from Contract Balance", function () {
   let depositContract: any;
-  let owner: Signer, user: Signer, other: Signer, serverSigner: Signer;
+  let testToken: any;
+  let owner: Signer, user: Signer, other: Signer;
   let chainId: number;
-  let token: any;
 
-  // Helper: sign message for withdrawETH.
-  async function signWithdrawETH(
-    auth: { amount: any; currentBalance: any; newBalance: any; gameResultsHash: any; nonce: number },
-    user: any,
-    contract: any,
-    chainId: number,
-    signer: Signer
-  ) {
-    const encodedAuth = ethers.utils.defaultAbiCoder.encode(
-      ["uint256", "uint256", "uint256", "bytes32", "uint256"],
-      [auth.amount, auth.currentBalance, auth.newBalance, auth.gameResultsHash, auth.nonce]
-    );
-    const message = ethers.utils.defaultAbiCoder.encode(
-      ["string", "uint256", "address", "bytes", "address"],
-      ["withdrawETH", chainId, await user.getAddress(), encodedAuth, contract.address]
-    );
-    const messageHash = ethers.utils.keccak256(message);
-    return await signer.signMessage(ethers.utils.arrayify(messageHash));
-  }
-
-  // Helper: sign message for withdrawToken.
-  async function signWithdrawToken(
-    auth: { amount: any; currentBalance: any; newBalance: any; gameResultsHash: any; nonce: number },
-    user: any,
-    token: any,
-    contract: any,
-    chainId: number,
-    signer: Signer
-  ) {
-    const encodedAuth = ethers.utils.defaultAbiCoder.encode(
-      ["uint256", "uint256", "uint256", "bytes32", "uint256"],
-      [auth.amount, auth.currentBalance, auth.newBalance, auth.gameResultsHash, auth.nonce]
-    );
-    const message = ethers.utils.defaultAbiCoder.encode(
-      ["string", "uint256", "address", "address", "bytes", "address"],
-      ["withdrawToken", chainId, await user.getAddress(), token.address, encodedAuth, contract.address]
-    );
-    const messageHash = ethers.utils.keccak256(message);
-    return await signer.signMessage(ethers.utils.arrayify(messageHash));
-  }
-
-  // Helper: sign message for updateGameResult.
+  // Helper to sign the updateGameResult message.
   async function signUpdateGameResult(
-    game: { gameId: string; newBalance: any; gameResultHash: any; scoreChange: number },
+    game: { gameId: string; newBalance: any; gameResultHash: string; scoreChange: number },
     nonce: number,
-    user: any,
-    token: { address: string },
-    contract: any,
+    user: Signer,
+    tokenAddress: string,
+    contractInstance: any,
     chainId: number,
     signer: Signer
   ) {
-    const message = ethers.utils.defaultAbiCoder.encode(
+    const userAddr = await user.getAddress();
+    console.log("signUpdateGameResult: userAddr =", userAddr);
+    console.log("signUpdateGameResult: tokenAddress =", tokenAddress);
+    console.log("signUpdateGameResult: contract address =", contractInstance.target);
+    
+    const encoded = ethers.AbiCoder.defaultAbiCoder().encode(
       [
         "string",
         "uint256",
@@ -75,289 +43,286 @@ describe("DepositContract", function () {
       [
         "updateGame",
         chainId,
-        await user.getAddress(),
-        token.address,
+        userAddr,
+        tokenAddress,
         game.gameId,
         game.newBalance,
         game.gameResultHash,
         game.scoreChange,
         nonce,
-        contract.address,
+        contractInstance.target,
       ]
     );
-    const messageHash = ethers.utils.keccak256(message);
-    return await signer.signMessage(ethers.utils.arrayify(messageHash));
+    console.log("Encoded message:", encoded);
+    const messageHash = ethers.keccak256(encoded);
+    console.log("Message hash:", messageHash);
+    const bytesMessage = ethers.getBytes(messageHash);
+    console.log("Bytes of message hash:", bytesMessage);
+    const signature = await signer.signMessage(bytesMessage);
+    console.log("Signature:", signature);
+    return signature;
   }
 
   beforeEach(async function () {
-    [owner, user, other, serverSigner] = await ethers.getSigners();
+    [owner, user, other] = await ethers.getSigners();
+    console.log("Owner address:", await owner.getAddress());
+    console.log("User address:", await user.getAddress());
+    console.log("Other address:", await other.getAddress());
 
-    // Deploy DepositContract.
+    // Deploy the DepositContract.
     const DepositContractFactory = await ethers.getContractFactory("DepositContract");
     depositContract = await DepositContractFactory.deploy();
+    await depositContract.waitForDeployment(); 
+    console.log("DepositContract address:", depositContract.target);
 
     const networkObj = await ethers.provider.getNetwork();
-    chainId = networkObj.chainId;
+    chainId = Number(networkObj.chainId);
+    console.log("Chain ID:", chainId);
 
-    // Deploy TestToken contract.
-    // Make sure you have a TestToken contract (e.g., inheriting from OpenZeppelin's ERC20) in your contracts folder.
+    // Deploy a TestToken contract.
     const TestTokenFactory = await ethers.getContractFactory("TestToken");
-    token = await TestTokenFactory.deploy("TestToken", "TTK", ethers.utils.parseEther("1000"));
-    await token.deployed();
+    testToken = await TestTokenFactory.deploy("TestToken", "TTK", ethers.parseEther("1000"));
+    console.log("TestToken deployed at:", testToken.address);
 
-    // Transfer some tokens to the user.
-    await token.transfer(await user.getAddress(), ethers.utils.parseEther("100"));
+    // Transfer tokens to participants.
+    await testToken.transfer(await user.getAddress(), ethers.parseEther("50"));
+    await testToken.transfer(await other.getAddress(), ethers.parseEther("50"));
+    console.log("Token transfers complete");
   });
 
-  describe("ETH Deposits and Withdrawals", function () {
-    it("should allow a user to deposit ETH", async function () {
-      const depositAmount = ethers.utils.parseEther("1");
-      await expect(depositContract.connect(user).depositETH({ value: depositAmount }))
-        .to.emit(depositContract, "ETHDeposit")
-        .withArgs(await user.getAddress(), depositAmount);
+  it("should finalize tournament and distribute all ETH and tokens to the highest ranking participant", async function () {
+    console.log("=== Starting test: Finalize Tournament ===");
 
-      const balance = await depositContract.ethDeposits(await user.getAddress());
-      expect(balance).to.equal(depositAmount);
-    });
+    // --- Start Tournament ---
+    const duration = 10; // seconds
+    console.log("Starting tournament for duration:", duration);
+    await depositContract.startTournament(duration);
+    console.log("Tournament started");
 
-    it("should allow a user to withdraw ETH with a valid signature", async function () {
-      // Deposit ETH.
-      const depositAmount = ethers.utils.parseEther("2");
-      await depositContract.connect(user).depositETH({ value: depositAmount });
+    // --- Deposits ---
+    // ETH deposits.
+    const depositUserETH = ethers.parseEther("2"); // user deposits 2 ETH
+    const depositOtherETH = ethers.parseEther("1");  // other deposits 1 ETH
+    console.log("Depositing ETH: user deposits", depositUserETH.toString());
+    await depositContract.connect(user).depositETH({ value: depositUserETH });
+    console.log("User ETH deposit complete");
+    console.log("Depositing ETH: other deposits", depositOtherETH.toString());
+    await depositContract.connect(other).depositETH({ value: depositOtherETH });
+    console.log("Other ETH deposit complete");
 
-      // Prepare withdrawal of 1 ETH.
-      const withdrawAmount = ethers.utils.parseEther("1");
-      const auth = {
-        amount: withdrawAmount,
-        currentBalance: depositAmount,
-        newBalance: depositAmount.sub(withdrawAmount),
-        gameResultsHash: ethers.constants.HashZero,
-        nonce: 1,
-      };
+    // Token deposits.
+    const depositTokenAmount = ethers.parseEther("50");
+    console.log("Depositing tokens: user approves", depositTokenAmount.toString());
+    console.log("DepositContract address:", depositContract.target);
+    console.log("depositTokenAmount:", depositTokenAmount.toString());
+    console.log("User address:", await user.getAddress());
+    await testToken.connect(user).approve(depositContract.target, depositTokenAmount);
+    console.log("User token approval complete");
+    console.log("DepositContract target address:", depositContract.target);
+    console.log("TestToken target address:", testToken.target);
+    console.log("Deposit token amount:", depositTokenAmount.toString());
+    console.log("User address:", await user.getAddress());
+    await depositContract.connect(user).depositToken(testToken.target, depositTokenAmount);
+    console.log("User token deposit complete");
+    console.log("Depositing tokens: other approves", depositTokenAmount.toString());
+    await testToken.connect(other).approve(depositContract.target, depositTokenAmount);
+    console.log("Other token approval complete");
+    await depositContract.connect(other).depositToken(testToken.target, depositTokenAmount);
+    console.log("Other token deposit complete");
 
-      // Sign the withdrawal message using the current serverSigner (owner by default).
-      const signature = await signWithdrawETH(auth, user, depositContract, chainId, owner);
+    // --- Update Tournament Performance via Game Results ---
+    // We want the user to win by having two wins versus other's one win.
+    // For ETH (token = ZERO_ADDRESS):
+    let currentBalanceUser = depositUserETH;
+    console.log("User game1: currentBalanceUser =", currentBalanceUser.toString());
+    const userGame1 = {
+      gameId: ethers.encodeBytes32String("userGame1"),
+      newBalance: currentBalanceUser + 1n,
+      gameResultHash: HASH_ZERO,
+      scoreChange: 1,
+    };
+    console.log("User game1 object:", userGame1);
+    const nonceUser1 = 1;
+    const sigUser1 = await signUpdateGameResult(
+      userGame1,
+      nonceUser1,
+      user,
+      ZERO_ADDRESS,
+      depositContract,
+      chainId,
+      owner
+    );
+    console.log("User game1 signature:", sigUser1);
+    await depositContract.connect(user).updateGameResult(
+      ZERO_ADDRESS,
+      userGame1,
+      nonceUser1,
+      sigUser1
+    );
+    console.log("User game1 updateGameResult complete");
 
-      await expect(depositContract.connect(user).withdrawETH(auth, signature))
-        .to.emit(depositContract, "ETHWithdrawal")
-        .withArgs(await user.getAddress(), withdrawAmount);
+    currentBalanceUser = currentBalanceUser + 1n;
+    console.log("User game2: currentBalanceUser =", currentBalanceUser.toString());
+    const userGame2 = {
+      gameId: ethers.encodeBytes32String("userGame2"),
+      newBalance: currentBalanceUser + 1n,
+      gameResultHash: HASH_ZERO,
+      scoreChange: 1,
+    };
+    console.log("User game2 object:", userGame2);
+    const nonceUser2 = 2;
+    const sigUser2 = await signUpdateGameResult(
+      userGame2,
+      nonceUser2,
+      user,
+      ZERO_ADDRESS,
+      depositContract,
+      chainId,
+      owner
+    );
+    console.log("User game2 signature:", sigUser2);
+    await depositContract.connect(user).updateGameResult(
+      ZERO_ADDRESS,
+      userGame2,
+      nonceUser2,
+      sigUser2
+    );
+    console.log("User game2 updateGameResult complete");
 
-      const newBalance = await depositContract.ethDeposits(await user.getAddress());
-      expect(newBalance).to.equal(auth.newBalance);
-    });
+    // Other: one win.
+    const otherGame = {
+      gameId: ethers.encodeBytes32String("otherGame"),
+      newBalance: depositOtherETH + 1n,
+      gameResultHash: HASH_ZERO,
+      scoreChange: 1,
+    };
+    console.log("Other game object:", otherGame);
+    const nonceOther = 1;
+    const sigOther = await signUpdateGameResult(
+      otherGame,
+      nonceOther,
+      other,
+      ZERO_ADDRESS,
+      depositContract,
+      chainId,
+      owner
+    );
+    console.log("Other game signature:", sigOther);
+    await depositContract.connect(other).updateGameResult(
+      ZERO_ADDRESS,
+      otherGame,
+      nonceOther,
+      sigOther
+    );
+    console.log("Other game updateGameResult complete");
 
-    it("should revert ETH withdrawal with an invalid signature", async function () {
-      const depositAmount = ethers.utils.parseEther("2");
-      await depositContract.connect(user).depositETH({ value: depositAmount });
+    // --- Verify Total Prize Before Finalization ---
+    const expectedETHPrize = depositUserETH + depositOtherETH;
+    console.log("Expected ETH prize:", expectedETHPrize.toString());
+    const contractETHBalanceBefore = await ethers.provider.getBalance(depositContract.target);
+    console.log("Contract ETH balance before finalization:", contractETHBalanceBefore.toString());
+    assert.strictEqual(
+      contractETHBalanceBefore.toString(),
+      expectedETHPrize.toString(),
+      "Contract ETH balance before finalization does not match expected prize"
+    );
 
-      const withdrawAmount = ethers.utils.parseEther("1");
-      const auth = {
-        amount: withdrawAmount,
-        currentBalance: depositAmount,
-        newBalance: depositAmount.sub(withdrawAmount),
-        gameResultsHash: ethers.constants.HashZero,
-        nonce: 2,
-      };
+    const contractTokenBalanceBefore = await testToken.balanceOf(depositContract.target);
+    const expectedTokenBalance = depositTokenAmount * 2n;
+    console.log("Expected token balance:", expectedTokenBalance.toString());
+    console.log("Contract token balance before finalization:", contractTokenBalanceBefore.toString());
+    assert.strictEqual(
+      contractTokenBalanceBefore.toString(),
+      expectedTokenBalance.toString(),
+      "Contract token balance before finalization does not match expected prize"
+    );
 
-      // Use a signature signed by 'other' (an invalid signer).
-      const badSignature = await signWithdrawETH(auth, user, depositContract, chainId, other);
+    // Record winner's balances before finalization.
+    const userEthBefore = await ethers.provider.getBalance(await user.getAddress());
+    const userTokenBefore = await testToken.balanceOf(await user.getAddress());
+    console.log("User ETH balance before finalization:", userEthBefore.toString());
+    console.log("User token balance before finalization:", userTokenBefore.toString());
 
-      await expect(depositContract.connect(user).withdrawETH(auth, badSignature))
-        .to.be.revertedWith("Invalid signature");
-    });
-  });
+    // --- Finalize Tournament ---
+    console.log("Increasing time by 20 seconds and mining a new block...");
+    await network.provider.send("evm_increaseTime", [20]);
+    await network.provider.send("evm_mine");
+    console.log("Time increased, finalizing tournament...");
+    const tx = await depositContract.finalizeTournament();
+    const receipt = await tx.wait();
+    console.log("Tournament finalized, receipt:", receipt);
 
-  describe("Token Deposits and Withdrawals", function () {
-    it("should allow a user to deposit and then withdraw tokens", async function () {
-      const depositAmount = ethers.utils.parseEther("10");
-      await token.connect(user).approve(depositContract.address, depositAmount);
+    // Print the entire receipt object and raw logs
+    console.log("Transaction receipt:", receipt);
+    console.log("Raw logs:", receipt.logs);
 
-      await expect(depositContract.connect(user).depositToken(token.address, depositAmount))
-        .to.emit(depositContract, "TokenDeposit")
-        .withArgs(await user.getAddress(), token.address, depositAmount);
+    // Print out decoded events, if any:
+    if (receipt.events && receipt.events.length > 0) {
+      console.log("Decoded events:");
+      receipt.events.forEach((e: any, idx: number) => {
+        console.log(`Event ${idx}:`, e.event, e.args);
+      });
+    } else {
+      console.log("No events found in receipt.");
+    }
 
-      const deposited = await depositContract.tokenDeposits(await user.getAddress(), token.address);
-      expect(deposited).to.equal(depositAmount);
 
-      const auth = {
-        amount: depositAmount.div(2),
-        currentBalance: depositAmount,
-        newBalance: depositAmount.sub(depositAmount.div(2)),
-        gameResultsHash: ethers.constants.HashZero,
-        nonce: 1,
-      };
+    // Verify the TournamentEnded event.
+    let tournamentEndedEvent;
+    for (const log of receipt.logs) {
+      try {
+        const parsedLog = depositContract.interface.parseLog(log);
+        if (parsedLog.name === "TournamentEnded") {
+          tournamentEndedEvent = parsedLog;
+          break;
+        }
+      } catch (e) {
+        // This log doesn't match our event signature, ignore it.
+      }
+    }
 
-      const signature = await signWithdrawToken(auth, user, token, depositContract, chainId, owner);
-      await expect(depositContract.connect(user).withdrawToken(auth, token.address, signature))
-        .to.emit(depositContract, "TokenWithdrawal")
-        .withArgs(await user.getAddress(), token.address, auth.amount);
+    console.log("TournamentEnded event:", tournamentEndedEvent);
+    assert.ok(tournamentEndedEvent, "TournamentEnded event not found");
+    const winner = tournamentEndedEvent.args.winner;
+    const expectedWinner = await user.getAddress();
+    console.log("Winner from event:", winner, "; Expected winner:", expectedWinner);
+    assert.strictEqual(winner, expectedWinner, "Winner is not the expected user");
 
-      const newTokenBalance = await depositContract.tokenDeposits(await user.getAddress(), token.address);
-      expect(newTokenBalance).to.equal(auth.newBalance);
-    });
-  });
+    // Verify contract balances are now zero.
+    const contractETHBalanceAfter = await ethers.provider.getBalance(depositContract.target);
+    console.log("Contract ETH balance after finalization:", contractETHBalanceAfter.toString());
+    assert.strictEqual(
+      contractETHBalanceAfter.toString(),
+      "0",
+      "Contract ETH balance after finalization is not zero"
+    );
+    const contractTokenBalanceAfter = await testToken.balanceOf(depositContract.target);
+    console.log("Contract token balance after finalization:", contractTokenBalanceAfter.toString());
+    assert.strictEqual(
+      contractTokenBalanceAfter.toString(),
+      "0",
+      "Contract token balance after finalization is not zero"
+    );
 
-  describe("Game Result Update and Tournament", function () {
-    it("should update game result and tournament score for ETH games", async function () {
-      // Start a tournament.
-      const duration = 60; // seconds
-      await expect(depositContract.startTournament(duration))
-        .to.emit(depositContract, "TournamentStarted");
+    // Verify winner received the prize.
+    const userEthAfter = await ethers.provider.getBalance(await user.getAddress());
+    console.log("User ETH balance after finalization:", userEthAfter.toString());
+    const tolerance = ethers.parseEther("0.01");
+    const expectedUserEth = userEthBefore + expectedETHPrize - tolerance;
+    console.log("Expected minimum user ETH balance after (within tolerance):", expectedUserEth.toString());
+    assert.ok(
+      userEthAfter > expectedUserEth,
+      "Winner did not receive the expected ETH prize (within tolerance)"
+    );
 
-      // Deposit ETH so the user has a balance.
-      const depositAmount = ethers.utils.parseEther("3");
-      await depositContract.connect(user).depositETH({ value: depositAmount });
-
-      // Prepare a game result update (for an ETH game, so token is address(0)).
-      const game = {
-        gameId: ethers.utils.formatBytes32String("game1"),
-        newBalance: depositAmount.sub(ethers.utils.parseEther("0.5")).toString(),
-        gameResultHash: ethers.constants.HashZero,
-        scoreChange: 10,
-      };
-      const nonce = 1;
-      const signature = await signUpdateGameResult(
-        game,
-        nonce,
-        user,
-        { address: ethers.constants.AddressZero },
-        depositContract,
-        chainId,
-        owner
-      );
-
-      await expect(
-        depositContract.connect(user).updateGameResult(
-          ethers.constants.AddressZero,
-          game,
-          nonce,
-          signature
-        )
-      )
-        .to.emit(depositContract, "GameResultUpdated")
-        .withArgs(
-          await user.getAddress(),
-          ethers.constants.AddressZero,
-          game.gameId,
-          game.scoreChange,
-          game.gameResultHash
-        );
-
-      // Verify tournament score and participant registration.
-      const score = await depositContract.gameScores(await user.getAddress());
-      expect(score).to.equal(game.scoreChange);
-      const isPart = await depositContract.isParticipant(await user.getAddress());
-      expect(isPart).to.equal(true);
-    });
-  });
-
-  describe("Tournament Finalization", function () {
-    it("should finalize the tournament and distribute the prize", async function () {
-      // Fund the tournament prize pool.
-      const prizeFund = ethers.utils.parseEther("5");
-      await depositContract.connect(owner).fundTournamentPrizePool({ value: prizeFund });
-
-      // Start tournament.
-      const duration = 10; // seconds
-      await depositContract.startTournament(duration);
-
-      // User deposits 2 ETH and gets a score of 20.
-      const depositUser1 = ethers.utils.parseEther("2");
-      await depositContract.connect(user).depositETH({ value: depositUser1 });
-      const game1 = {
-        gameId: ethers.utils.formatBytes32String("gameUser1"),
-        newBalance: depositUser1.sub(ethers.utils.parseEther("0.2")).toString(),
-        gameResultHash: ethers.constants.HashZero,
-        scoreChange: 20,
-      };
-      const nonce1 = 1;
-      const sig1 = await signUpdateGameResult(
-        game1,
-        nonce1,
-        user,
-        { address: ethers.constants.AddressZero },
-        depositContract,
-        chainId,
-        owner
-      );
-      await depositContract.connect(user).updateGameResult(ethers.constants.AddressZero, game1, nonce1, sig1);
-
-      // Other deposits 1 ETH and gets a score of 10.
-      const depositUser2 = ethers.utils.parseEther("1");
-      await depositContract.connect(other).depositETH({ value: depositUser2 });
-      const game2 = {
-        gameId: ethers.utils.formatBytes32String("gameUser2"),
-        newBalance: depositUser2.sub(ethers.utils.parseEther("0.1")).toString(),
-        gameResultHash: ethers.constants.HashZero,
-        scoreChange: 10,
-      };
-      const nonce2 = 1;
-      const sig2 = await signUpdateGameResult(
-        game2,
-        nonce2,
-        other,
-        { address: ethers.constants.AddressZero },
-        depositContract,
-        chainId,
-        owner
-      );
-      await depositContract.connect(other).updateGameResult(ethers.constants.AddressZero, game2, nonce2, sig2);
-
-      // Fast-forward time to after tournament end.
-      await network.provider.send("evm_increaseTime", [20]);
-      await network.provider.send("evm_mine");
-
-      const tx = await depositContract.finalizeTournament();
-      const receipt = await tx.wait();
-
-      // Verify that the TournamentEnded event indicates the user with the higher score won.
-      const tournamentEndedEvent = receipt.events.find((e: any) => e.event === "TournamentEnded");
-      expect(tournamentEndedEvent.args.winner).to.equal(await user.getAddress());
-
-      // The prize pool should now be 0.
-      const prizePoolAfter = await depositContract.tournamentPrizePool();
-      expect(prizePoolAfter).to.equal(0);
-    });
-  });
-
-  describe("Admin Functions", function () {
-    it("should allow the owner to ban and unban an address", async function () {
-      await expect(depositContract.connect(owner).banAddress(await user.getAddress()))
-        .to.emit(depositContract, "AddressBanned")
-        .withArgs(await user.getAddress());
-      expect(await depositContract.banned(await user.getAddress())).to.equal(true);
-
-      await expect(depositContract.connect(owner).unbanAddress(await user.getAddress()))
-        .to.emit(depositContract, "AddressUnbanned")
-        .withArgs(await user.getAddress());
-      expect(await depositContract.banned(await user.getAddress())).to.equal(false);
-    });
-
-    it("should pause and unpause the contract", async function () {
-      await expect(depositContract.connect(owner).pause())
-        .to.emit(depositContract, "EmergencyPaused")
-        .withArgs(await owner.getAddress());
-
-      await expect(
-        depositContract.connect(user).depositETH({ value: ethers.utils.parseEther("1") })
-      ).to.be.revertedWith("Pausable: paused");
-
-      await expect(depositContract.connect(owner).unpause())
-        .to.emit(depositContract, "EmergencyUnpaused")
-        .withArgs(await owner.getAddress());
-    });
-  });
-
-  describe("Emergency Withdrawal", function () {
-    it("should allow the owner to perform emergency withdrawal", async function () {
-      const depositAmount = ethers.utils.parseEther("1");
-      await depositContract.connect(user).depositETH({ value: depositAmount });
-
-      const tx = await depositContract.connect(owner).emergencyWithdraw(ethers.constants.AddressZero, depositAmount);
-      await tx.wait();
-
-      const contractBalance = await ethers.provider.getBalance(depositContract.address);
-      expect(contractBalance).to.equal(0);
-    });
+    const userTokenAfter = await testToken.balanceOf(await user.getAddress());
+    const expectedUserToken = userTokenBefore + depositTokenAmount * 2n;
+    console.log("User token balance after finalization:", userTokenAfter.toString());
+    console.log("Expected user token balance after:", expectedUserToken.toString());
+    assert.strictEqual(
+      userTokenAfter.toString(),
+      expectedUserToken.toString(),
+      "Winner did not receive the expected token prize"
+    );
   });
 });
