@@ -65,16 +65,24 @@ contract TuringTournament is Ownable, ReentrancyGuard, Pausable {
     // ------------------------------------------------------------------------
     // Storage for Deposits and Basic Mappings
     // ------------------------------------------------------------------------
+
     // Mapping: user => ETH balance
     mapping(address => uint256) public ethDeposits;
+
     // Mapping: user => (token => token balance)
     mapping(address => mapping(address => uint256)) public tokenDeposits;
+
     // Banlist mapping (user => bool)
     mapping(address => bool) public banned;
+
     // Authorized server signer for off-chain approvals.
     address public serverSigner;
+
     // Nonce usage for replay protection: user => (nonce => used?)
     mapping(address => mapping(uint256 => bool)) public usedNonces;
+
+    // Add sequential nonce tracking
+    mapping(address => uint256) public lastNonce;
 
     // ------------------------------------------------------------------------
     // Tournament-Related Storage
@@ -156,14 +164,6 @@ contract TuringTournament is Ownable, ReentrancyGuard, Pausable {
     }
 
     // ------------------------------------------------------------------------
-    // Constructor
-    // ------------------------------------------------------------------------
-    constructor() {
-        // By default, let the contract owner also be the initial server signer
-        serverSigner = msg.sender;
-    }
-
-    // ------------------------------------------------------------------------
     // Modifiers
     // ------------------------------------------------------------------------
     modifier notBanned() {
@@ -172,18 +172,41 @@ contract TuringTournament is Ownable, ReentrancyGuard, Pausable {
     }
 
     // ------------------------------------------------------------------------
+    // Constructor
+    // ------------------------------------------------------------------------
+    constructor() {
+        // By default, let the contract owner also be the initial server signer
+        serverSigner = msg.sender;
+    }
+
+    // ------------------------------------------------------------------------
     // Admin Functions
     // ------------------------------------------------------------------------
+
+    /**
+     * @notice Ban an address from interacting with the contract.
+     * @param user The address to ban.
+     */
     function banAddress(address user) external onlyOwner {
         banned[user] = true;
         emit AddressBanned(user);
     }
 
+
+    /**
+     * @notice Unban an address.
+     * @param user The address to unban.
+     */
     function unbanAddress(address user) external onlyOwner {
         banned[user] = false;
         emit AddressUnbanned(user);
     }
 
+
+    /**
+     * @notice Update the server signer address that authorizes deposits/withdrawals.
+     * @param newSigner The new signer address.
+     */
     function setServerSigner(address newSigner) external onlyOwner {
         require(newSigner != address(0), "Invalid signer address");
         emit ServerSignerChanged(serverSigner, newSigner);
@@ -216,6 +239,7 @@ contract TuringTournament is Ownable, ReentrancyGuard, Pausable {
         uint256 actualDeposit = IERC20(token).balanceOf(address(this)) - balanceBefore;
 
         tokenDeposits[msg.sender][token] += actualDeposit;
+
         emit TokenDeposit(msg.sender, token, actualDeposit);
         emit BalanceUpdated(msg.sender, token, tokenDeposits[msg.sender][token]);
 
@@ -301,10 +325,14 @@ contract TuringTournament is Ownable, ReentrancyGuard, Pausable {
         );
         require(recovered == serverSigner, "Invalid signature");
 
+        // Emit events before external calls
         emit TokenWithdrawal(msg.sender, token, auth.amount);
         emit BalanceChange(msg.sender, "withdraw", auth.gameResultsHash);
 
+        // Set balance directly to server-authorized new balance
         tokenDeposits[msg.sender][token] = auth.newBalance;
+
+        // External call last
         bool success = IERC20(token).transfer(msg.sender, auth.amount);
         require(success, "Token transfer failed");
     }
@@ -312,12 +340,13 @@ contract TuringTournament is Ownable, ReentrancyGuard, Pausable {
     // ------------------------------------------------------------------------
     // Internal Helpers
     // ------------------------------------------------------------------------
+
     /**
      * @dev Marks a nonce as used for the given user. Reverts if already used.
      */
     function _useNonce(address user, uint256 nonce) internal {
-        require(!usedNonces[user][nonce], "Nonce already used");
-        usedNonces[user][nonce] = true;
+        require(nonce > lastNonce[user], "Nonce must be sequential");
+        lastNonce[user] = nonce;
         emit NonceUsed(user, nonce);
     }
 
@@ -325,7 +354,7 @@ contract TuringTournament is Ownable, ReentrancyGuard, Pausable {
     // Emergency Functions
     // ------------------------------------------------------------------------
     function pause() external onlyOwner {
-        _pause();  
+        _pause();
         emit EmergencyPaused(msg.sender);
     }
 
@@ -334,14 +363,12 @@ contract TuringTournament is Ownable, ReentrancyGuard, Pausable {
         emit EmergencyUnpaused(msg.sender);
     }
 
-    // Prevent direct ETH transfers.
+    // Add explicit receive function
     receive() external payable {
         revert("Direct ETH deposits not allowed");
     }
 
-    /**
-     * @notice Get the contract's ETH balance.
-     */
+    // Add contract balance check
     function getContractBalance() external view returns (uint256) {
         return address(this).balance;
     }
@@ -353,9 +380,7 @@ contract TuringTournament is Ownable, ReentrancyGuard, Pausable {
         return IERC20(token).balanceOf(address(this));
     }
 
-    /**
-     * @notice Emergency withdrawal for the owner.
-     */
+    // Add emergency withdrawal for owner
     function emergencyWithdraw(address token, uint256 amount) external onlyOwner {
         if (token == address(0)) {
             (bool sent, ) = payable(owner).call{value: amount}("");
@@ -368,6 +393,7 @@ contract TuringTournament is Ownable, ReentrancyGuard, Pausable {
     // ------------------------------------------------------------------------
     // Tournament and Game Result Functions
     // ------------------------------------------------------------------------
+
     /**
      * @notice Update balance and tournament performance based on a game result.
      * @dev The off-chain server must sign the message containing gameId, newBalance, gameResultHash,
@@ -389,7 +415,7 @@ contract TuringTournament is Ownable, ReentrancyGuard, Pausable {
 
         _useNonce(msg.sender, nonce);
 
-        // New message hash includes the scoreChange field.
+        // Verify server signature
         bytes32 messageHash = keccak256(
             abi.encode(
                 "updateGame",
@@ -411,7 +437,7 @@ contract TuringTournament is Ownable, ReentrancyGuard, Pausable {
         );
         require(recovered == serverSigner, "Invalid signature");
 
-        // Update the user's deposit balance.
+        // Update balance
         if (token == address(0)) {
             ethDeposits[msg.sender] = game.newBalance;
             emit BalanceUpdated(msg.sender, address(0), game.newBalance);
@@ -432,6 +458,7 @@ contract TuringTournament is Ownable, ReentrancyGuard, Pausable {
             }
         }
 
+        // Emit game result with calculated amount change
         emit GameResultUpdated(
             msg.sender,
             token,
