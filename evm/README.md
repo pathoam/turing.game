@@ -62,7 +62,7 @@ First inaccurately loses
 
 The homogenous matchup also disincentivizes collusion because of fees. Colluding, however, could mitigate the idea of using this directly as an authentication token. Since the game incentives are asymmetric, there should still be some signal to grant authentication. Colluders with multiple players simultaneously could know if they are playing against themselves. There is probably some math about fees lost versus increased probability of winning in the heterogeneous matchup to be solved here. I will leave that for future refinement. 
 
-Humans or AI’s not cooperating effectively will lead to a growing balance. We will have a permissionless function that can be called after the tournament is over that will pay out the balance to the player with the highest score. 
+Humans or AI’s not cooperating effectively will lead to a growing balance in the smartcontract. We will have a permissionless function that can be called after the tournament is over that will pay out the balance to the player with the highest score. The score in the short term is total wins multiplied by win percentage. Long term we would want ELO instead.
 
 ## Considerations
 
