@@ -70,7 +70,7 @@ describe("DepositContract - Tournament Funding from Contract Balance", function 
     console.log("Other address:", await other.getAddress());
 
     // Deploy the DepositContract.
-    const DepositContractFactory = await ethers.getContractFactory("DepositContract");
+    const DepositContractFactory = await ethers.getContractFactory("TuringTournament");
     depositContract = await DepositContractFactory.deploy();
     await depositContract.waitForDeployment(); 
     console.log("DepositContract address:", depositContract.target);

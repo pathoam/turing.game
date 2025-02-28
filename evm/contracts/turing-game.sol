@@ -38,6 +38,10 @@ contract Ownable {
         _;
     }
 
+    /**
+     * @notice Transfer the ownership to a new address.
+     * @param newOwner The address to which ownership is transferred.
+     */
     function transferOwnership(address newOwner) external onlyOwner {
         require(newOwner != address(0), "Ownable: new owner is zero address");
         emit OwnershipTransferred(owner, newOwner);
@@ -46,7 +50,7 @@ contract Ownable {
 }
 
 /**
- * @title DepositContract with Tournament Reward Distribution
+ * @title TuringTournament
  * @notice This contract now:
  *  - Accepts ETH and token deposits/withdrawals.
  *  - Tracks tournament performance using wins and games played.
@@ -55,20 +59,21 @@ contract Ownable {
  *         (wins^2 * 1e18) / gamesPlayed.
  *  - The ranking is equivalent to number of wins multiplied by winrate. A quadratic.
  */
-contract DepositContract is Ownable, ReentrancyGuard, Pausable {
+contract TuringTournament is Ownable, ReentrancyGuard, Pausable {
     using ECDSA for bytes32;
 
     // ------------------------------------------------------------------------
     // Storage for Deposits and Basic Mappings
     // ------------------------------------------------------------------------
+    // Mapping: user => ETH balance
     mapping(address => uint256) public ethDeposits;
+    // Mapping: user => (token => token balance)
     mapping(address => mapping(address => uint256)) public tokenDeposits;
+    // Banlist mapping (user => bool)
     mapping(address => bool) public banned;
-
     // Authorized server signer for off-chain approvals.
     address public serverSigner;
-
-    // Nonce mapping for replay protection.
+    // Nonce usage for replay protection: user => (nonce => used?)
     mapping(address => mapping(uint256 => bool)) public usedNonces;
 
     // ------------------------------------------------------------------------
@@ -95,6 +100,7 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
     // ------------------------------------------------------------------------
     // Events
     // ------------------------------------------------------------------------
+
     event ETHDeposit(address indexed user, uint256 amount);
     event TokenDeposit(address indexed user, address indexed token, uint256 amount);
 
@@ -106,9 +112,17 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
 
     event ServerSignerChanged(address indexed oldSigner, address indexed newSigner);
 
-    event BalanceChange(address indexed user, string operation, bytes32 gameResultsHash);
+    event BalanceChange(
+        address indexed user,
+        string operation,  // "deposit" or "withdraw"
+        bytes32 gameResultsHash  // Hash of all games since last balance change
+    );
+
+    // Add events for nonce usage and balance updates
     event NonceUsed(address indexed user, uint256 nonce);
     event BalanceUpdated(address indexed user, address indexed token, uint256 newBalance);
+    event EmergencyPaused(address indexed by);
+    event EmergencyUnpaused(address indexed by);
 
     // Game result event logs the score change.
     event GameResultUpdated(
@@ -124,9 +138,6 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
     event TournamentEnded(uint256 endTime, address winner);
     event RewardDistributed(address winner);
 
-    // ------------------------------------------------------------------------
-    // Structs
-    // ------------------------------------------------------------------------
     // GameResult includes the game ID, final balance, a hash for verification, and the score change.
     struct GameResult {
         bytes32 gameId;           // Unique identifier for the game.
@@ -148,7 +159,7 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
     // Constructor
     // ------------------------------------------------------------------------
     constructor() {
-        // By default, the deployer is both the owner and the initial server signer.
+        // By default, let the contract owner also be the initial server signer
         serverSigner = msg.sender;
     }
 
@@ -156,7 +167,7 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
     // Modifiers
     // ------------------------------------------------------------------------
     modifier notBanned() {
-        require(!banned[msg.sender], "DepositContract: caller is banned");
+        require(!banned[msg.sender], "caller is banned");
         _;
     }
 
@@ -182,8 +193,10 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
     // ------------------------------------------------------------------------
     // Deposit Functions (Require Signature)
     // ------------------------------------------------------------------------
+
     function depositETH() external payable notBanned whenNotPaused {
         require(msg.value > 0, "Amount must be positive");
+
         ethDeposits[msg.sender] += msg.value;
         emit ETHDeposit(msg.sender, msg.value);
         emit BalanceUpdated(msg.sender, address(0), ethDeposits[msg.sender]);
@@ -196,6 +209,7 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
         require(token != address(0), "Invalid token address");
         require(amount > 0, "Amount must be positive");
 
+        // Track actual token balance changes
         uint256 balanceBefore = IERC20(token).balanceOf(address(this));
         bool success = IERC20(token).transferFrom(msg.sender, address(this), amount);
         require(success, "Token transfer failed");
@@ -240,15 +254,25 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
         );
         require(recovered == serverSigner, "Invalid signature");
 
+        // Emit events before external calls
         emit ETHWithdrawal(msg.sender, auth.amount);
         emit BalanceChange(msg.sender, "withdraw", auth.gameResultsHash);
         emit BalanceUpdated(msg.sender, address(0), auth.newBalance);
 
+        // Set balance directly to server-authorized new balance
         ethDeposits[msg.sender] = auth.newBalance;
+
+        // External call last
         (bool sent, ) = payable(msg.sender).call{value: auth.amount}("");
         require(sent, "ETH transfer failed");
     }
 
+    /**
+     * @notice Withdraw ERC20 tokens from the contract, requiring server-signed authorization.
+     * @param auth The struct containing the authorization data.
+     * @param token The ERC20 token address.
+     * @param signature A signature from `serverSigner`.
+     */
     function withdrawToken(
         ServerAuthorization calldata auth,
         address token,
@@ -283,6 +307,62 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
         tokenDeposits[msg.sender][token] = auth.newBalance;
         bool success = IERC20(token).transfer(msg.sender, auth.amount);
         require(success, "Token transfer failed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Internal Helpers
+    // ------------------------------------------------------------------------
+    /**
+     * @dev Marks a nonce as used for the given user. Reverts if already used.
+     */
+    function _useNonce(address user, uint256 nonce) internal {
+        require(!usedNonces[user][nonce], "Nonce already used");
+        usedNonces[user][nonce] = true;
+        emit NonceUsed(user, nonce);
+    }
+
+    // ------------------------------------------------------------------------
+    // Emergency Functions
+    // ------------------------------------------------------------------------
+    function pause() external onlyOwner {
+        _pause();  
+        emit EmergencyPaused(msg.sender);
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
+        emit EmergencyUnpaused(msg.sender);
+    }
+
+    // Prevent direct ETH transfers.
+    receive() external payable {
+        revert("Direct ETH deposits not allowed");
+    }
+
+    /**
+     * @notice Get the contract's ETH balance.
+     */
+    function getContractBalance() external view returns (uint256) {
+        return address(this).balance;
+    }
+
+    /**
+     * @notice Get the contract's token balance for a given token.
+     */
+    function getContractTokenBalance(address token) external view returns (uint256) {
+        return IERC20(token).balanceOf(address(this));
+    }
+
+    /**
+     * @notice Emergency withdrawal for the owner.
+     */
+    function emergencyWithdraw(address token, uint256 amount) external onlyOwner {
+        if (token == address(0)) {
+            (bool sent, ) = payable(owner).call{value: amount}("");
+            require(sent, "ETH transfer failed");
+        } else {
+            require(IERC20(token).transfer(owner, amount), "Token transfer failed");
+        }
     }
 
     // ------------------------------------------------------------------------
@@ -435,57 +515,4 @@ contract DepositContract is Ownable, ReentrancyGuard, Pausable {
         return (wins[participant] * wins[participant] * 1e18) / gamesPlayed[participant];
     }
 
-    // ------------------------------------------------------------------------
-    // Internal Helpers
-    // ------------------------------------------------------------------------
-    /**
-     * @dev Marks a nonce as used for the given user. Reverts if already used.
-     */
-    function _useNonce(address user, uint256 nonce) internal {
-        require(!usedNonces[user][nonce], "Nonce already used");
-        usedNonces[user][nonce] = true;
-        emit NonceUsed(user, nonce);
-    }
-
-    // ------------------------------------------------------------------------
-    // Emergency Functions
-    // ------------------------------------------------------------------------
-    function pause() external onlyOwner {
-        _pause();
-    }
-
-    function unpause() external onlyOwner {
-        _unpause();
-    }
-
-    // Prevent direct ETH transfers.
-    receive() external payable {
-        revert("Direct ETH deposits not allowed");
-    }
-
-    /**
-     * @notice Get the contract's ETH balance.
-     */
-    function getContractBalance() external view returns (uint256) {
-        return address(this).balance;
-    }
-
-    /**
-     * @notice Get the contract's token balance for a given token.
-     */
-    function getContractTokenBalance(address token) external view returns (uint256) {
-        return IERC20(token).balanceOf(address(this));
-    }
-
-    /**
-     * @notice Emergency withdrawal for the owner.
-     */
-    function emergencyWithdraw(address token, uint256 amount) external onlyOwner {
-        if (token == address(0)) {
-            (bool sent, ) = payable(owner).call{value: amount}("");
-            require(sent, "ETH transfer failed");
-        } else {
-            require(IERC20(token).transfer(owner, amount), "Token transfer failed");
-        }
-    }
 }
