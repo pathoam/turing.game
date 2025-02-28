@@ -151,7 +151,7 @@ contract TuringTournament is Ownable, ReentrancyGuard, Pausable {
         bytes32 gameId;           // Unique identifier for the game.
         uint256 newBalance;       // Final balance after the game.
         bytes32 gameResultHash;   // Hash of game data for verification.
-        int256 scoreChange;       // Change in score (positive for win, negative for loss).
+        int256 scoreChange;       // Change in score (positive for win).
     }
 
     // Struct for server-signed authorization for withdrawals.
@@ -217,7 +217,7 @@ contract TuringTournament is Ownable, ReentrancyGuard, Pausable {
     }
 
     // ------------------------------------------------------------------------
-    // Deposit Functions (Require Signature)
+    // Deposit Functions
     // ------------------------------------------------------------------------
 
     function depositETH() external payable notBanned whenNotPaused {
