@@ -1,14 +1,9 @@
 import mongoose, { Document, Schema } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { TokenAmount } from '../utils/tokenAmount';
+import { Balances } from '../utils/balances';
 
 export type Currency = 'sol' | 'usdc' | 'turing';
-
-export interface Balances {
-  sol: number;
-  usdc: number;
-  turing: number;
-}
 
 export interface GameOutcome {
   winner: Participant;
@@ -67,11 +62,13 @@ const stakeInfoSchema = new Schema<StakeInfo>({
   priceUsd: { type: Number }
 }, { _id: false });
 
-const balancesSchema = new Schema<Balances>({
-  sol: { type: Number, default: 0 },
-  usdc: { type: Number, default: 0 },
-  turing: { type: Number, default: 0 }
-}, { _id: false });
+// Store token balances by chain and token address
+const balanceSchema = new Schema({
+    chainId: { type: String, required: true },
+    tokenAddress: { type: String, required: true },
+    amount: { type: String, required: true }, // Store as string to handle BigInt
+    decimals: { type: Number, required: true }
+});
 
 const verificationSchema = new Schema<VerificationStatus>({
   verified: { type: Boolean, default: false },
@@ -104,15 +101,7 @@ const participantSchema = new Schema<Participant>({
   elo: { type: Number, default: 1000 },
   gamesPlayed: { type: Number, default: 0 },
   wins: { type: Number, default: 0 },
-  balances: { 
-    type: Map,
-    of: {
-      tokenAddress: String,
-      chainId: Schema.Types.Mixed,
-      amount: String,
-      decimals: Number
-    }
-  },
+  balances: [balanceSchema], // Array of balances
   currentStake: { 
     amountUsd: Number,
     tokenAddress: String,
@@ -143,12 +132,13 @@ participantSchema.methods.updateBalance = function(
     amount: TokenAmount,
     chainId: string | number
 ) {
-    const currentBalance = this.balances.get(tokenAddress) || {
-        tokenAddress,
-        chainId,
-        amount: "0",
-        decimals: amount.getDecimals()
-    };
+    const currentBalance = this.balances.find((b: TokenBalance) => 
+        b.chainId === chainId && b.tokenAddress === tokenAddress
+    );
+    
+    if (!currentBalance) {
+        throw new Error('Balance not found');
+    }
     
     const currentAmount = new TokenAmount(currentBalance.amount, currentBalance.decimals);
     const newAmount = currentAmount.add(amount);
@@ -157,16 +147,15 @@ participantSchema.methods.updateBalance = function(
         throw new Error('Insufficient balance');
     }
     
-    this.balances.set(tokenAddress, {
-        ...currentBalance,
-        amount: newAmount.toString()
-    });
+    currentBalance.amount = newAmount.toString();
     
     return this.save();
 };
 
 participantSchema.methods.getBalance = function(tokenAddress: string) {
-    return this.balances.get(tokenAddress);
+    return this.balances.find((b: TokenBalance) => 
+        b.chainId === tokenAddress.split(':')[0] && b.tokenAddress === tokenAddress.split(':')[1]
+    );
 };
 
 participantSchema.methods.setStake = function(stake: StakeInfo) {

@@ -1,4 +1,4 @@
-import { Chain, Token } from '../utils/balances';
+import { Chain, Token, TokenWithChain, attachChainToToken } from './chains';
 import { EventEmitter } from 'events';
 
 export interface TransactionResult {
@@ -27,9 +27,9 @@ export interface TokenPrice {
 }
 
 export abstract class ChainHandler extends EventEmitter {
-    protected readonly chain: Chain;
-    protected readonly treasuryAddress: string;
-    protected readonly rpcUrl: string;
+    public chain: Chain;
+    protected rpcUrl: string;
+    protected treasuryAddress: string;
 
     constructor(chain: Chain, rpcUrl: string, treasuryAddress: string) {
         super();
@@ -74,5 +74,13 @@ export abstract class ChainHandler extends EventEmitter {
 
     public getNativeToken(): string {
         return this.chain.nativeToken;
+    }
+
+    // Helper to find token in chain
+    public findTokenInChain(tokenAddress: string): TokenWithChain | undefined {
+        const token = Object.values(this.chain.tokens).find(
+            t => t.address.toLowerCase() === tokenAddress.toLowerCase()
+        );
+        return token ? attachChainToToken(token, this.chain) : undefined;
     }
 }

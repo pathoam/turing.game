@@ -16,6 +16,8 @@ import { initializeDatabase } from './utils/database';
 import { handleReport } from './handlers/report';
 import { ChainManager } from './chainHandler/chainManager';
 import { activeParticipants } from './utils/activeParticipants';
+import { Balances } from './utils/balances';
+import { Balance, ParticipantBalances, BalanceResponse } from './types/balance';
 
 
 dotenv.config();
@@ -170,23 +172,37 @@ async function main() {
       io.to(sessionId).emit('typing', { senderId, isTyping });
   });
 
-    socket.on('getBalances', async ({ participantId }) => {
+    socket.on('getParticipantBalances', async ({ participantId }) => {
       try {
-          const participant = await Participant.findOne({ id: participantId });
-          if (!participant) {
-              socket.emit('error', 'Participant not found');
-              return;
-          }
-  
-          socket.emit('balanceUpdate', {
-              balances: participant.balances,
-              winnings: participant.winnings
-          });
+        let participant = activeParticipants.findById(participantId);
+        if (!participant) {
+          const dbParticipant = await Participant.findOne({ id: participantId });
+          if (!dbParticipant) throw new Error('Participant not found');
+          participant = dbParticipant;
+        }
+
+        const response: ParticipantBalances = {
+          role: participant.role as 'user' | 'assistant',
+          participantId: participant.id,
+          balances: Object.entries(participant.balances).reduce((acc, [addr, bal]) => ({
+            ...acc,
+            [addr]: {
+              amount: bal.amount.toString(),
+              decimals: bal.decimals,
+              symbol: bal.symbol,
+              chainName: bal.chainName,
+              chainId: bal.chainId
+            }
+          }), {})
+        };
+
+        socket.emit('balanceUpdate', [response]);  // Send as BalanceResponse array
       } catch (error) {
-          console.error('Failed to get balances:', error);
-          socket.emit('error', 'Failed to get balance information');
+        console.error('Failed to get balances:', error);
+        socket.emit('error', 'Failed to get balance information');
       }
     });
+
 
     socket.on('report', async(params) => {
       await handleReport(socket, io, params);

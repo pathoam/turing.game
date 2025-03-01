@@ -5,31 +5,40 @@ import mongoose from 'mongoose';
 import OpenAI from 'openai';
 import { calculateEloChange } from '../utils/elo';
 import { TokenAmount } from '../utils/tokenAmount';
+import { CHAINS } from '../chainHandler/chains';
 
 export async function initParticipant(address: string, role: 'user' | 'assistant' = 'user') {
-    try {
-        let participant = await Participant.findOne({ address, role });
+  try {
+    let participant = await Participant.findOne({ address, role });
 
-        if (!participant) {
-            participant = await Participant.create({
-                id: uuidv4(),
-                address,
-                role,
-                status: 'active',
-                elo: 1000,
-                gamesPlayed: 0,
-                wins: 0,
-                winnings: 0,
-                balances: new Map(), // Start with empty balances
-                currentStake: null
-            });
-        }
+    if (!participant) {
+      // Initialize balances for all supported chains
+      const initialBalances = Object.values(CHAINS).map(chain => ({
+        chainId: chain.id,
+        tokenAddress: "0x0000000000000000000000000000000000000000", // Native token
+        amount: "0",
+        decimals: 18
+      }));
 
-        return participant;
-    } catch (error) {
-        console.error('Failed to initialize participant:', error);
-        throw error;
+      participant = await Participant.create({
+        id: uuidv4(),
+        address,
+        role,
+        status: 'active',
+        elo: 1000,
+        gamesPlayed: 0,
+        wins: 0,
+        winnings: 0,
+        balances: initialBalances,
+        currentStake: null
+      });
     }
+
+    return participant;
+  } catch (error) {
+    console.error('Failed to initialize participant:', error);
+    throw error;
+  }
 }
 
 export async function editParticipant(

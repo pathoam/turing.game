@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { CHAINS, Chain, Token } from '../utils/balances';
+import { CHAINS, Chain, Token, TokenWithChain } from './chains';
 import { EVMHandler } from './evmHandler';
 import { SolanaHandler } from './solanaHandler';
 import { ChainHandler, TransactionEvent, TransactionResult } from './chainHandler';
@@ -9,7 +9,6 @@ import { Server } from 'socket.io';
 import { ethers } from 'ethers';
 import { Participant } from '../models/participant';
 import { TokenAmount } from '../utils/tokenAmount';
-import { TOKENS } from '../utils/balances';
 import { activeParticipants } from '../utils/activeParticipants';
 
 export class ChainManager extends EventEmitter {
@@ -190,12 +189,11 @@ export class ChainManager extends EventEmitter {
             }
 
             const tokenAddress = token === 'ETH' ? ethers.ZeroAddress : token;
-            const decimals = token === 'ETH' ? 18 : (
-                Object.values(TOKENS).find(t => 
-                    t.address.toLowerCase() === token.toLowerCase() && 
-                    t.chain.id.toString() === chainId
-                )?.decimals || 18
-            );
+            const tokenInfo = token === 'ETH' 
+                ? handler.chain.tokens.ETH
+                : handler.findTokenInChain(tokenAddress);
+            
+            const decimals = tokenInfo?.decimals || 18;
 
             const depositAmount = new TokenAmount(amount, decimals);
             await participant.updateBalance(tokenAddress, depositAmount, chainId);
@@ -241,7 +239,7 @@ export class ChainManager extends EventEmitter {
     }
 
     // Methods from old ChainManager
-    async getBalance(address: string, token: Token): Promise<number> {
+    async getBalance(address: string, token: TokenWithChain): Promise<number> {
         const handler = this.handlers.get(token.chain.id.toString());
         if (!handler) {
             throw new Error(`No handler found for chain ${token.chain.id}`);
@@ -252,7 +250,7 @@ export class ChainManager extends EventEmitter {
     async transfer(
         chainId: string | number,
         to: string,
-        token: Token,
+        token: TokenWithChain,
         amount: number
     ): Promise<TransactionResult> {
         const handler = this.handlers.get(chainId.toString());

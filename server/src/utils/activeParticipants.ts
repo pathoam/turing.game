@@ -1,31 +1,29 @@
 import { Participant } from '../models/participant';
 
-class ActiveParticipantsManager {
-    private static instance: ActiveParticipantsManager;
+export class ActiveParticipantsManager {
     private participants: Map<string, Participant>;
 
-    private constructor() {
+    constructor() {
         this.participants = new Map();
     }
 
-    public static getInstance(): ActiveParticipantsManager {
-        if (!ActiveParticipantsManager.instance) {
-            ActiveParticipantsManager.instance = new ActiveParticipantsManager();
-        }
-        return ActiveParticipantsManager.instance;
+    public set(address: string, participant: Participant) {
+        this.participants.set(address, participant);
     }
 
     public get(address: string): Participant | undefined {
         return this.participants.get(address);
     }
 
-    public set(address: string, participant: Participant): void {
-        this.participants.set(address, participant);
+    // Add new helper methods
+    public findById(participantId: string): Participant | undefined {
+        return Array.from(this.participants.values())
+            .find(p => p.id === participantId);
     }
 
-    public delete(address: string): void {
-        this.participants.delete(address);
+    public getAll(): Participant[] {
+        return Array.from(this.participants.values());
     }
 }
 
-export const activeParticipants = ActiveParticipantsManager.getInstance(); 
+export const activeParticipants = new ActiveParticipantsManager(); 

@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
 import { ChainHandler, TransactionResult, BalanceResponse, TransactionEvent, TokenPrice } from './chainHandler';
-import { Chain, Token, TOKENS } from '../utils/balances';
+import { Chain, Token } from './chains';
 import { WebSocketProvider } from '@ethersproject/providers';
 import { Contract } from '@ethersproject/contracts';
 import { Alchemy, Network, AlchemySubscription } from 'alchemy-sdk';
@@ -97,15 +97,11 @@ export class EVMHandler extends ChainHandler {
     }
 
     private getTokenSymbol(tokenAddress: string): string {
-        if (tokenAddress === this.treasuryAddress) {
+        if (tokenAddress === ethers.ZeroAddress) {
             return this.chain.nativeToken;
         }
         
-        const token = Object.values(TOKENS).find((t: Token) => 
-            t.address.toLowerCase() === tokenAddress.toLowerCase() &&
-            t.chain.id === this.chain.id
-        );
-        
+        const token = this.findTokenInChain(tokenAddress);
         return token?.symbol || 'UNKNOWN';
     }
 
@@ -243,13 +239,13 @@ export class EVMHandler extends ChainHandler {
         return await this.provider.getFeeData().then(data => data.gasPrice ?? 0n);
     }
 
-    async getTokenBalances(address: string, tokens: Token[]): Promise<BalanceResponse> {
+    async getTokenBalances(address: string): Promise<BalanceResponse> {
         try {
-            // Filter for ERC20 tokens only
-            const tokenAddresses = tokens
-                .filter(t => t.address !== '0x0000000000000000000000000000000000000000')
-                .map(t => t.address);
+            // Get all non-native tokens for this chain
+            const tokens = Object.values(this.chain.tokens)
+                .filter(t => t.address !== ethers.ZeroAddress);
 
+            const tokenAddresses = tokens.map(t => t.address);
             const response = await this.alchemy.core.getTokenBalances(address, tokenAddresses);
             
             const balances: BalanceResponse = {};
@@ -259,21 +255,15 @@ export class EVMHandler extends ChainHandler {
                     balances[token.address] = Number(
                         ethers.formatUnits(BigInt(balance.tokenBalance), token.decimals)
                     );
-                } else {
-                    balances[token.address] = 0;
                 }
             });
 
             // Add native token balance
-            const nativeToken = tokens.find(t => 
-                t.address === '0x0000000000000000000000000000000000000000'
+            const nativeToken = this.chain.tokens.ETH;
+            const nativeBalance = await this.provider.getBalance(address);
+            balances[nativeToken.address] = Number(
+                ethers.formatUnits(nativeBalance, nativeToken.decimals)
             );
-            if (nativeToken) {
-                const balance = await this.provider.getBalance(address);
-                balances[nativeToken.address] = Number(
-                    ethers.formatUnits(balance, nativeToken.decimals)
-                );
-            }
 
             return balances;
         } catch (error) {
@@ -385,18 +375,13 @@ export class EVMHandler extends ChainHandler {
             
             const chainId = this.chain.id;
             let tokenAddress = token === 'ETH' ? ethers.ZeroAddress : token;
-            let decimals = 18;  // default for ETH
+            
+            const tokenInfo = token === 'ETH' 
+                ? this.chain.tokens.ETH
+                : this.findTokenInChain(tokenAddress);
+            
+            const decimals = tokenInfo?.decimals || 18;
 
-            // Get token decimals if it's an ERC20
-            if (token !== 'ETH') {
-                const knownToken = Object.values(TOKENS).find(t => 
-                    t.address.toLowerCase() === token.toLowerCase() && 
-                    t.chain.id === chainId
-                );
-                decimals = knownToken?.decimals || 18;
-            }
-
-            // Create TokenAmount for the deposit
             const depositAmount = new TokenAmount(amount, decimals);
 
             // Update in-memory participant if exists
@@ -437,12 +422,11 @@ export class EVMHandler extends ChainHandler {
             
             const chainId = this.chain.id;
             let tokenAddress = token === 'ETH' ? ethers.ZeroAddress : token;
-            let decimals = token === 'ETH' ? 18 : (
-                Object.values(TOKENS).find(t => 
-                    t.address.toLowerCase() === token.toLowerCase() && 
-                    t.chain.id === chainId
-                )?.decimals || 18
-            );
+            const tokenInfo = token === 'ETH' 
+                ? this.chain.tokens.ETH
+                : this.findTokenInChain(tokenAddress);
+            
+            const decimals = tokenInfo?.decimals || 18;
 
             // Create negative TokenAmount for withdrawal
             const withdrawAmount = new TokenAmount(amount, decimals);
@@ -488,12 +472,11 @@ export class EVMHandler extends ChainHandler {
             
             const chainId = this.chain.id;
             let tokenAddress = token === 'ETH' ? ethers.ZeroAddress : token;
-            let decimals = token === 'ETH' ? 18 : (
-                Object.values(TOKENS).find(t => 
-                    t.address.toLowerCase() === token.toLowerCase() && 
-                    t.chain.id === chainId
-                )?.decimals || 18
-            );
+            const tokenInfo = token === 'ETH' 
+                ? this.chain.tokens.ETH
+                : this.findTokenInChain(tokenAddress);
+            
+            const decimals = tokenInfo?.decimals || 18;
 
             // Create TokenAmount from amountChange (can be positive or negative)
             const changeAmount = new TokenAmount(amountChange.toString(), decimals);
