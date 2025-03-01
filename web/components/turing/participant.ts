@@ -8,11 +8,11 @@ export function useParticipant() {
   const { address, isConnected } = useAccount();
   const socket = useSocket();
 
-  const initializeParticipant = async (role = 'user') => {
+  const initializeParticipant = async (address: string, role = 'user') => {
     if (!address || !isConnected) return null;
     
     return new Promise((resolve, reject) => {
-      socket.emit('initialize_participant', { role });
+      socket.emit('initialize_participant', { address, role });
       
       socket.once('participant_initialized', (participant) => {
         resolve(participant);

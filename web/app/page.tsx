@@ -14,7 +14,7 @@ export default function Home() {
 
   useEffect(() => {
     if (isConnected && address) {
-      initializeParticipant()
+      initializeParticipant(address, 'user')
         .then((p) => setParticipant(p as Participant))
         .catch(console.error)
         .finally(() => setIsLoading(false));
