@@ -1,9 +1,10 @@
 import './global.css';
 import { UiLayout } from '@/components/ui/ui-layout';
 import { ClusterProvider } from '@/components/cluster/cluster-data-access';
-import { SolanaProvider } from '@/components/solana/solana-provider';
 import { ReactQueryProvider } from './react-query-provider';
 import { TuringHeader } from '@/components/turing/header';
+import { WalletProvider } from '../components/wallet/wallet-provider';
+import { SocketProvider } from '../components/socket/socket-provider';
 
 export const metadata = {
   title: 'turing-tournament',
@@ -19,14 +20,16 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <ReactQueryProvider>
-          <ClusterProvider>
-            <SolanaProvider>
-              <TuringHeader />
-              {children}
-            </SolanaProvider>
-          </ClusterProvider>
-        </ReactQueryProvider>
+        <SocketProvider>
+          <WalletProvider>
+            <ReactQueryProvider>
+              <ClusterProvider>
+                <TuringHeader />
+                {children}
+              </ClusterProvider>
+            </ReactQueryProvider>
+          </WalletProvider>
+        </SocketProvider>
       </body>
     </html>
   );

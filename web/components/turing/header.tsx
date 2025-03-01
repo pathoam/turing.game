@@ -1,12 +1,17 @@
 'use client';
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useWallet } from '@solana/wallet-adapter-react';
-import { WalletButton } from '../solana/solana-provider';
+import { useAccount } from 'wagmi';
+import { WalletButton } from '../wallet/wallet-button';
 import { ellipsify } from '../ui/ui-layout';
 
 export function TuringHeader() {
-  const { publicKey } = useWallet();
+  const { address } = useAccount();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   return (
     <div className="navbar bg-base-100">
@@ -30,14 +35,18 @@ export function TuringHeader() {
         </div>
       </div>
       <div className="flex-none gap-2">
-        {publicKey && (
-          <div className="hidden md:flex items-center">
-            {/* <span className="text-sm font-mono">
-              {ellipsify(publicKey.toString())}
-            </span> */}
-          </div>
+        {mounted && (
+          <>
+            {address && (
+              <div className="hidden md:flex items-center">
+                {/* <span className="text-sm font-mono">
+                  {ellipsify(address)}
+                </span> */}
+              </div>
+            )}
+            <WalletButton />
+          </>
         )}
-        <WalletButton />
       </div>
     </div>
   );

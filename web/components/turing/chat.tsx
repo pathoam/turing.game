@@ -1,11 +1,15 @@
 'use client';
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useSocket } from '@/hooks/useSocket';
+import { useSocket } from '../socket/socket-provider';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { Message, ChatSession, GameResult, GameMode } from '../types';
+import { Participant } from './participant';
 
+interface TuringChatProps {
+  participant: Participant;
+}
 
-export default function TuringChat() {
+export default function TuringChat({ participant }: TuringChatProps) {
   // Core state
   const { publicKey } = useWallet();
   const address = publicKey?.toString();
