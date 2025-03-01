@@ -1,6 +1,6 @@
 import { Network } from 'alchemy-sdk';
 import { EVMHandler } from './evmHandler';
-import { Chain } from '../utils/balances';
+import { Chain } from './chains';
 
 export class BaseHandler extends EVMHandler {
     constructor(chain: Chain, rpcUrl: string, treasuryAddress: string) {

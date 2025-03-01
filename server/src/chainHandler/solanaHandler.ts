@@ -1,6 +1,6 @@
 import { Connection, PublicKey } from '@solana/web3.js';
 import { ChainHandler, TransactionResult, BalanceResponse, TokenPrice } from './chainHandler';
-import { Chain, Token } from '../utils/balances';
+import { Chain, Token } from './chains';
 
 interface HeliusAsset {
     id: string;

@@ -73,25 +73,24 @@ async function main() {
     socket.emit('connection_established');
     
     socket.on('initialize_participant', async ({ address, role = 'user' }) => {
-      console.log('Processing initialize_participant for ', address);
+      console.log('Processing initialize_participant for', address);
       try {
+        if (!address) {
+          throw new Error('Address is required for initialization');
+        }
+
         const participant = await initParticipant(address, role);
         
         // Store in active participants
         activeParticipants.set(address, participant);
         
         // Subscribe to chain events for this address
-        socket.join(address); // Join room for chain event updates
+        socket.join(address);
         
-        socket.on('disconnect', () => {
-          // Don't remove from activeParticipants here - they might reconnect
-          socket.leave(address);
-        });
-
         socket.emit('participant_initialized', participant);
       } catch (error) {
         console.error('Failed to initialize participant:', error);
-        socket.emit('error', 'Failed to initialize participant');
+        socket.emit('error', error instanceof Error ? error.message : 'Failed to initialize participant');
       }
     });
 
