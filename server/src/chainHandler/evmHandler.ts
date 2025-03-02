@@ -10,7 +10,7 @@ import { Participant } from '../models/participant';
 import { TokenAmount } from '../utils/tokenAmount';
 
 // Import contract ABI and address
-import { abi as DepositContractABI } from '../../../evm/artifacts/contracts/turing-game.sol/DepositContract.json';
+import { abi as DepositContractABI } from '../../../evm/artifacts/contracts/turing-game.sol/TuringTournament.json';
 
 dotenv.config();
 
